@@ -1,0 +1,2 @@
+timestamp,cpu_percent,memory_percent,memory_rss_mb,memory_available_gb,disk_usage_percent,active_threads,open_files,network_connections
+1752382506.8339598,5.9,74.6,775.765625,4.5652008056640625,24.5,14,0,1

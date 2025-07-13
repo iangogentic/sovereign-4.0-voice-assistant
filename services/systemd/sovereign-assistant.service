@@ -1,0 +1,129 @@
+[Unit]
+Description=Sovereign Voice Assistant - AI-powered voice assistant with offline capabilities
+Documentation=https://github.com/sovereign-ai/voice-assistant
+Documentation=file:///opt/sovereign/INSTALL.md
+After=network.target sound.target graphical-session.target
+Wants=network.target
+Requires=pulseaudio.service
+
+# Dependencies for audio and network
+After=pulseaudio.service
+After=pipewire.service
+After=network-online.target
+Wants=network-online.target
+
+# Ensure we start after the user session for audio access
+After=user@.service
+
+[Service]
+Type=notify
+User=sovereign
+Group=sovereign
+WorkingDirectory=/opt/sovereign
+
+# Environment configuration
+Environment=PYTHONPATH=/opt/sovereign
+Environment=SOVEREIGN_ENV=production
+Environment=LOG_LEVEL=INFO
+Environment=DEBUG=false
+
+# Load environment from file
+EnvironmentFile=-/opt/sovereign/.env
+EnvironmentFile=-/etc/sovereign/environment
+
+# Main execution command
+ExecStart=/opt/sovereign/venv/bin/python -m assistant.main --service
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Pre and post execution hooks
+ExecStartPre=/opt/sovereign/services/scripts/pre-start.sh
+ExecStartPost=/opt/sovereign/services/scripts/post-start.sh
+ExecStopPost=/opt/sovereign/services/scripts/post-stop.sh
+
+# Restart configuration
+Restart=always
+RestartSec=10s
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+# Timeout configuration
+TimeoutStartSec=120s
+TimeoutStopSec=60s
+TimeoutAbortSec=30s
+
+# Signal handling
+KillMode=mixed
+KillSignal=SIGTERM
+FinalKillSignal=SIGKILL
+
+# Process management
+PIDFile=/run/sovereign/sovereign-assistant.pid
+GuessMainPID=yes
+
+# Security and sandboxing
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=no  # Need audio devices
+RemoveIPC=yes
+
+# Allow access to required directories
+ReadWritePaths=/opt/sovereign/data
+ReadWritePaths=/opt/sovereign/logs
+ReadWritePaths=/var/log/sovereign
+ReadWritePaths=/run/sovereign
+ReadOnlyPaths=/opt/sovereign
+
+# Network access
+PrivateNetwork=no
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# System calls security
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@debug @mount @cpu-emulation @obsolete @privileged @reboot @swap
+
+# Resource limits
+LimitNOFILE=8192
+LimitNPROC=4096
+MemoryMax=4G
+CPUQuota=200%
+
+# Capabilities (minimal required)
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+# Additional security measures
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+
+# Logging configuration
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sovereign-assistant
+SyslogFacility=daemon
+
+# Journal configuration
+LogLevelMax=info
+LogExtraFields=SERVICE=sovereign-assistant
+
+[Install]
+WantedBy=multi-user.target
+Alias=sovereign.service
+
+# Additional service configuration for different scenarios
+[Unit]
+# For desktop environments (optional)
+# After=graphical-session.target
+# WantedBy=graphical-session.target
+
+# For headless servers
+# WantedBy=multi-user.target 

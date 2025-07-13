@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sovereign 4.0 - Performance Dashboard</title>
+    
+    <!-- Chart.js for high-performance real-time visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-streaming@2.0.0/dist/chartjs-plugin-streaming.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+    
+    <!-- Socket.IO for WebSocket communication -->
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='images/favicon.ico') }}">
+</head>
+<body>
+    <!-- Header with system status -->
+    <header class="dashboard-header">
+        <div class="header-content">
+            <div class="logo-section">
+                <h1>🎤 Sovereign 4.0</h1>
+                <span class="subtitle">Performance Dashboard</span>
+            </div>
+            
+            <div class="status-section">
+                <div class="connection-status" id="connectionStatus">
+                    <span class="status-indicator" id="statusIndicator"></span>
+                    <span class="status-text" id="statusText">Connecting...</span>
+                </div>
+                
+                <div class="system-health" id="systemHealth">
+                    <span class="health-indicator" id="healthIndicator"></span>
+                    <span class="health-text" id="healthText">Unknown</span>
+                </div>
+                
+                <div class="time-display" id="timeDisplay"></div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Dashboard Grid -->
+    <main class="dashboard-container">
+        <!-- Critical Metrics Row (Always Visible) -->
+        <section class="critical-metrics">
+            <div class="metric-card" id="latencyCard">
+                <div class="metric-header">
+                    <h3>🚀 Pipeline Latency</h3>
+                    <div class="metric-controls">
+                        <button class="expand-btn" onclick="toggleCard('latencyCard')">📊</button>
+                    </div>
+                </div>
+                <div class="metric-summary">
+                    <div class="primary-value" id="latencyPrimary">--ms</div>
+                    <div class="secondary-values">
+                        <span>P95: <span id="latencyP95">--</span>ms</span>
+                        <span>P99: <span id="latencyP99">--</span>ms</span>
+                    </div>
+                </div>
+                <div class="metric-chart-container">
+                    <canvas id="latencyChart"></canvas>
+                </div>
+            </div>
+
+            <div class="metric-card" id="accuracyCard">
+                <div class="metric-header">
+                    <h3>🎯 Accuracy Metrics</h3>
+                    <div class="metric-controls">
+                        <button class="expand-btn" onclick="toggleCard('accuracyCard')">📊</button>
+                    </div>
+                </div>
+                <div class="metric-summary">
+                    <div class="primary-value" id="accuracyPrimary">--%</div>
+                    <div class="secondary-values">
+                        <span>STT: <span id="sttAccuracy">--</span>%</span>
+                        <span>Memory: <span id="memoryAccuracy">--</span>%</span>
+                    </div>
+                </div>
+                <div class="metric-chart-container">
+                    <canvas id="accuracyChart"></canvas>
+                </div>
+            </div>
+
+            <div class="metric-card" id="resourceCard">
+                <div class="metric-header">
+                    <h3>💻 System Resources</h3>
+                    <div class="metric-controls">
+                        <button class="expand-btn" onclick="toggleCard('resourceCard')">📊</button>
+                    </div>
+                </div>
+                <div class="metric-summary">
+                    <div class="resource-gauges">
+                        <div class="gauge-item">
+                            <span class="gauge-label">CPU</span>
+                            <div class="gauge-bar">
+                                <div class="gauge-fill" id="cpuGauge"></div>
+                            </div>
+                            <span class="gauge-value" id="cpuValue">--%</span>
+                        </div>
+                        <div class="gauge-item">
+                            <span class="gauge-label">Memory</span>
+                            <div class="gauge-bar">
+                                <div class="gauge-fill" id="memoryGauge"></div>
+                            </div>
+                            <span class="gauge-value" id="memoryValue">--%</span>
+                        </div>
+                        <div class="gauge-item">
+                            <span class="gauge-label">GPU</span>
+                            <div class="gauge-bar">
+                                <div class="gauge-fill" id="gpuGauge"></div>
+                            </div>
+                            <span class="gauge-value" id="gpuValue">--%</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="metric-chart-container">
+                    <canvas id="resourceChart"></canvas>
+                </div>
+            </div>
+
+            <div class="metric-card" id="throughputCard">
+                <div class="metric-header">
+                    <h3>⚡ Throughput</h3>
+                    <div class="metric-controls">
+                        <button class="expand-btn" onclick="toggleCard('throughputCard')">📊</button>
+                    </div>
+                </div>
+                <div class="metric-summary">
+                    <div class="primary-value" id="throughputPrimary">-- req/s</div>
+                    <div class="secondary-values">
+                        <span>Success Rate: <span id="successRate">--</span>%</span>
+                        <span>Total: <span id="totalRequests">--</span></span>
+                    </div>
+                </div>
+                <div class="metric-chart-container">
+                    <canvas id="throughputChart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- Detailed Component Metrics (Expandable) -->
+        <section class="component-metrics" id="componentMetrics">
+            <div class="section-header">
+                <h2>Component Performance</h2>
+                <div class="section-controls">
+                    <button class="toggle-btn" onclick="toggleSection('componentMetrics')">⬇️</button>
+                </div>
+            </div>
+            
+            <div class="component-grid">
+                <div class="component-card">
+                    <h4>🎤 Audio Processing</h4>
+                    <div class="component-metrics-display">
+                        <div class="metric-item">
+                            <span class="label">Capture Latency:</span>
+                            <span class="value" id="audioCaptureLatency">--ms</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="label">Success Rate:</span>
+                            <span class="value" id="audioSuccessRate">--%</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="component-card">
+                    <h4>🗣️ Speech-to-Text</h4>
+                    <div class="component-metrics-display">
+                        <div class="metric-item">
+                            <span class="label">Processing Time:</span>
+                            <span class="value" id="sttLatency">--ms</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="label">Confidence:</span>
+                            <span class="value" id="sttConfidence">--%</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="component-card">
+                    <h4>🧠 LLM Processing</h4>
+                    <div class="component-metrics-display">
+                        <div class="metric-item">
+                            <span class="label">Inference Time:</span>
+                            <span class="value" id="llmLatency">--ms</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="label">Response Quality:</span>
+                            <span class="value" id="llmQuality">--%</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="component-card">
+                    <h4>🎵 Text-to-Speech</h4>
+                    <div class="component-metrics-display">
+                        <div class="metric-item">
+                            <span class="label">Generation Time:</span>
+                            <span class="value" id="ttsLatency">--ms</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="label">Audio Quality:</span>
+                            <span class="value" id="ttsQuality">--%</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="component-card">
+                    <h4>💭 Memory System</h4>
+                    <div class="component-metrics-display">
+                        <div class="metric-item">
+                            <span class="label">Retrieval Time:</span>
+                            <span class="value" id="memoryLatency">--ms</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="label">BLEU Score:</span>
+                            <span class="value" id="memoryBleu">--%</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="component-card">
+                    <h4>👀 Screen Monitoring</h4>
+                    <div class="component-metrics-display">
+                        <div class="metric-item">
+                            <span class="label">OCR Accuracy:</span>
+                            <span class="value" id="ocrAccuracy">--%</span>
+                        </div>
+                        <div class="metric-item">
+                            <span class="label">Processing Time:</span>
+                            <span class="value" id="ocrLatency">--ms</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Alerts and Anomalies -->
+        <section class="alerts-section" id="alertsSection">
+            <div class="section-header">
+                <h2>🚨 Alerts & Anomalies</h2>
+                <div class="alert-controls">
+                    <button class="clear-alerts-btn" onclick="clearAlerts()">Clear All</button>
+                </div>
+            </div>
+            
+            <div class="alerts-container" id="alertsContainer">
+                <div class="no-alerts" id="noAlertsMessage">
+                    ✅ No active alerts - System performing normally
+                </div>
+            </div>
+        </section>
+
+        <!-- Time Range Controls -->
+        <section class="controls-section">
+            <div class="time-range-controls">
+                <label for="timeRange">Time Range:</label>
+                <select id="timeRange" onchange="updateTimeRange()">
+                    <option value="300">5 minutes</option>
+                    <option value="900">15 minutes</option>
+                    <option value="1800">30 minutes</option>
+                    <option value="3600" selected>1 hour</option>
+                    <option value="21600">6 hours</option>
+                    <option value="86400">24 hours</option>
+                </select>
+            </div>
+            
+            <div class="metric-controls">
+                <label>Metrics to Display:</label>
+                <div class="checkbox-group">
+                    <label><input type="checkbox" id="showLatency" checked onchange="updateMetricDisplay()"> Latency</label>
+                    <label><input type="checkbox" id="showAccuracy" checked onchange="updateMetricDisplay()"> Accuracy</label>
+                    <label><input type="checkbox" id="showResource" checked onchange="updateMetricDisplay()"> Resources</label>
+                    <label><input type="checkbox" id="showThroughput" checked onchange="updateMetricDisplay()"> Throughput</label>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="dashboard-footer">
+        <div class="footer-content">
+            <span>Sovereign 4.0 Voice Assistant Dashboard</span>
+            <span>Connected Clients: <span id="connectedClients">0</span></span>
+            <span>Last Update: <span id="lastUpdate">Never</span></span>
+        </div>
+    </footer>
+
+    <!-- Mobile Navigation Overlay -->
+    <div class="mobile-nav-overlay" id="mobileNavOverlay">
+        <div class="mobile-nav-content">
+            <div class="nav-header">
+                <h3>Dashboard Navigation</h3>
+                <button class="close-nav" onclick="closeMobileNav()">✕</button>
+            </div>
+            <div class="nav-links">
+                <a href="#" onclick="scrollToSection('critical-metrics')">Critical Metrics</a>
+                <a href="#" onclick="scrollToSection('component-metrics')">Component Details</a>
+                <a href="#" onclick="scrollToSection('alerts-section')">Alerts</a>
+                <a href="#" onclick="scrollToSection('controls-section')">Controls</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mobile Menu Button -->
+    <button class="mobile-menu-btn" id="mobileMenuBtn" onclick="openMobileNav()">☰</button>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-content">
+            <div class="loading-spinner"></div>
+            <div class="loading-text">Connecting to Sovereign 4.0...</div>
+        </div>
+    </div>
+
+    <!-- Custom JavaScript -->
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+</body>
+</html> 

@@ -1,0 +1,326 @@
+version: '3.8'
+
+# Sovereign Voice Assistant - Docker Compose Configuration
+# Orchestrates the complete application stack with vector database and monitoring
+
+services:
+  # =============================================================================
+  # Chroma Vector Database - Memory storage
+  # =============================================================================
+  chroma-db:
+    image: chromadb/chroma:latest
+    container_name: sovereign-chroma
+    restart: unless-stopped
+    environment:
+      - CHROMA_SERVER_HOST=0.0.0.0
+      - CHROMA_SERVER_PORT=8000
+      - CHROMA_SERVER_CORS_ALLOW_ORIGINS=["http://localhost:3000","http://localhost:8080"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    networks:
+      - sovereign-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # =============================================================================
+  # Sovereign Voice Assistant - Main Application
+  # =============================================================================
+  sovereign-assistant:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+      args:
+        BUILD_VERSION: ${BUILD_VERSION:-latest}
+        BUILD_DATE: ${BUILD_DATE}
+        VCS_REF: ${VCS_REF}
+    container_name: sovereign-assistant
+    restart: unless-stopped
+    depends_on:
+      chroma-db:
+        condition: service_healthy
+    environment:
+      # API Keys (from .env file)
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - PERPLEXITY_API_KEY=${PERPLEXITY_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
+      # Application Configuration
+      - SOVEREIGN_ENV=production
+      - LOG_LEVEL=INFO
+      - DEBUG=false
+      # Database Configuration
+      - CHROMA_HOST=chroma-db
+      - CHROMA_PORT=8000
+      # Performance Configuration
+      - MAX_WORKERS=4
+      - MEMORY_LIMIT=4096
+      - CACHE_SIZE=1000
+    ports:
+      - "8080:8080"  # Dashboard
+      - "5000:5000"  # API
+    volumes:
+      - sovereign_data:/app/data
+      - sovereign_logs:/app/logs
+      - sovereign_config:/app/config
+      - /dev/snd:/dev/snd  # Audio device access (Linux)
+    networks:
+      - sovereign-network
+    devices:
+      - /dev/snd  # Audio devices
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2.0'
+        reservations:
+          memory: 2G
+          cpus: '1.0'
+
+  # =============================================================================
+  # Model Server - Dedicated offline model inference (optional)
+  # =============================================================================
+  model-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: model-server
+    container_name: sovereign-models
+    restart: unless-stopped
+    environment:
+      - SOVEREIGN_ENV=production
+      - LOG_LEVEL=INFO
+    ports:
+      - "9000:9000"  # Model serving port
+    volumes:
+      - sovereign_models:/app/data/offline_models
+    networks:
+      - sovereign-network
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+    profiles:
+      - models
+      - full
+
+  # =============================================================================
+  # Redis Cache - Session and caching layer (optional)
+  # =============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: sovereign-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - sovereign-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - cache
+      - full
+
+  # =============================================================================
+  # Nginx Reverse Proxy - Load balancing and SSL termination (optional)
+  # =============================================================================
+  nginx:
+    image: nginx:alpine
+    container_name: sovereign-nginx
+    restart: unless-stopped
+    depends_on:
+      - sovereign-assistant
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/ssl:/etc/nginx/ssl:ro
+      - nginx_logs:/var/log/nginx
+    networks:
+      - sovereign-network
+    profiles:
+      - proxy
+      - full
+
+  # =============================================================================
+  # Monitoring Stack - Prometheus + Grafana (optional)
+  # =============================================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: sovereign-prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=168h'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - sovereign-network
+    profiles:
+      - monitoring
+      - full
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: sovereign-grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docker/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./docker/grafana/datasources:/etc/grafana/provisioning/datasources
+    networks:
+      - sovereign-network
+    profiles:
+      - monitoring
+      - full
+
+# =============================================================================
+# Development Override - Hot reload and debugging
+# =============================================================================
+  sovereign-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: sovereign-dev
+    depends_on:
+      chroma-db:
+        condition: service_healthy
+    environment:
+      # API Keys
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - PERPLEXITY_API_KEY=${PERPLEXITY_API_KEY}
+      # Development Configuration
+      - SOVEREIGN_ENV=development
+      - LOG_LEVEL=DEBUG
+      - DEBUG=true
+      - CHROMA_HOST=chroma-db
+      - CHROMA_PORT=8000
+    ports:
+      - "8080:8080"  # Dashboard
+      - "5000:5000"  # API
+      - "8888:8888"  # Jupyter (dev)
+    volumes:
+      - .:/app  # Source code hot reload
+      - sovereign_dev_data:/app/data
+      - sovereign_dev_logs:/app/logs
+      - /dev/snd:/dev/snd  # Audio devices
+    networks:
+      - sovereign-network
+    devices:
+      - /dev/snd
+    profiles:
+      - dev
+      - development
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  sovereign-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+# =============================================================================
+# Volumes - Persistent data storage
+# =============================================================================
+volumes:
+  # Production volumes
+  chroma_data:
+    driver: local
+  sovereign_data:
+    driver: local
+  sovereign_logs:
+    driver: local
+  sovereign_config:
+    driver: local
+  sovereign_models:
+    driver: local
+  
+  # Optional service volumes
+  redis_data:
+    driver: local
+  nginx_logs:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  
+  # Development volumes
+  sovereign_dev_data:
+    driver: local
+  sovereign_dev_logs:
+    driver: local
+
+# =============================================================================
+# Usage Examples:
+# =============================================================================
+# 
+# Production deployment:
+#   docker-compose up -d
+# 
+# Development with hot reload:
+#   docker-compose --profile dev up -d
+# 
+# Full stack with monitoring:
+#   docker-compose --profile full up -d
+# 
+# Testing:
+#   docker-compose -f docker-compose.yml -f docker-compose.test.yml up --build testing
+# 
+# Scale main service:
+#   docker-compose up -d --scale sovereign-assistant=3
+# 
+# View logs:
+#   docker-compose logs -f sovereign-assistant
+# 
+# Database backup:
+#   docker-compose exec chroma-db sh -c 'tar czf - /chroma' > backup.tar.gz
+# 
+# Health check:
+#   docker-compose ps
+#   docker-compose exec sovereign-assistant python -c "import requests; print(requests.get('http://localhost:8080/health').json())"
+# 
+# ============================================================================= 

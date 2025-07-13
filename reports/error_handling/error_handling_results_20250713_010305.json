@@ -1,0 +1,39 @@
+{
+  "summary": {
+    "start_time": 1752382959.865921,
+    "end_time": 1752382985.678594,
+    "duration_minutes": 0.43021121819814045,
+    "total_scenarios": 2,
+    "passed_scenarios": 0,
+    "failed_scenarios": 2,
+    "critical_failures": 2,
+    "average_recovery_time": 0,
+    "success_rate": 0.0
+  },
+  "test_results": [
+    {
+      "scenario_name": "Network Connectivity Failure",
+      "failure_type": "network_failure",
+      "expected_recovery": "offline_mode",
+      "critical": true,
+      "recovery_time": 9.965589046478271,
+      "max_recovery_time": 5.0,
+      "success": false,
+      "error_message": "slow recovery (9.97s > 5.0s)",
+      "recovery_mechanism_triggered": true,
+      "system_state_stable": true
+    },
+    {
+      "scenario_name": "Memory Pressure",
+      "failure_type": "memory_exhaustion",
+      "expected_recovery": "graceful_degradation",
+      "critical": true,
+      "recovery_time": 11.844825029373169,
+      "max_recovery_time": 10.0,
+      "success": false,
+      "error_message": "slow recovery (11.84s > 10.0s)",
+      "recovery_mechanism_triggered": true,
+      "system_state_stable": true
+    }
+  ]
+}

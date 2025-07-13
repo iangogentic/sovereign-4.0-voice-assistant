@@ -1,0 +1,160 @@
+{
+  "summary": {
+    "start_time": 1752383588.299702,
+    "end_time": 1752383688.271408,
+    "duration_minutes": 1.6661951025327046,
+    "security_score": 0.7999999999999999,
+    "privacy_score": 0.8,
+    "load_score": 1.0,
+    "overall_score": 0.8666666666666667,
+    "compliance_status": "GOOD",
+    "critical_issues_count": 0
+  },
+  "test_results": [
+    {
+      "test_type": "api_key_protection",
+      "test_name": "API Key Protection",
+      "success": true,
+      "score": 0.9,
+      "duration_seconds": 0.004038095474243164,
+      "details": {
+        "OPENAI_API_KEY_status": "Protected",
+        "OPENROUTER_API_KEY_status": "Protected",
+        "ANTHROPIC_API_KEY_status": "Protected",
+        "env_file_permissions": "Insecure",
+        "protected_keys_count": 3,
+        "total_keys_count": 3
+      },
+      "recommendations": [
+        "Set .env file permissions to 600"
+      ]
+    },
+    {
+      "test_type": "secure_communication",
+      "test_name": "Secure Communication",
+      "success": true,
+      "score": 1.0,
+      "duration_seconds": 14.21397614479065,
+      "details": {
+        "ssl_version": "OpenSSL 3.0.13 30 Jan 2024",
+        "ssl_context_created": true,
+        "tls_v1_3_supported": true,
+        "https_api_working": true,
+        "api_response_received": true,
+        "uses_https": true,
+        "insecure_protocols_detected": false
+      },
+      "recommendations": []
+    },
+    {
+      "test_type": "input_validation",
+      "test_name": "Input Validation",
+      "success": false,
+      "score": 0.5,
+      "duration_seconds": 25.320460081100464,
+      "details": {
+        "malicious_input_0_handled": true,
+        "malicious_input_1_reflected": true,
+        "malicious_input_2_reflected": true,
+        "malicious_input_3_reflected": true,
+        "malicious_input_4_handled": true,
+        "malicious_input_5_handled": true,
+        "safe_responses": 3,
+        "total_malicious_tests": 6,
+        "input_safety_rate": 0.5
+      },
+      "recommendations": [
+        "Input reflection detected for test 1",
+        "Input reflection detected for test 2",
+        "Input reflection detected for test 3",
+        "Improve input validation and sanitization"
+      ]
+    },
+    {
+      "test_type": "data_retention",
+      "test_name": "Data Retention",
+      "success": true,
+      "score": 0.7,
+      "duration_seconds": 0.006117105484008789,
+      "details": {
+        "data_old_files": 0,
+        "logs_old_files": 0,
+        ".taskmaster_old_files": 0,
+        "retention_config_found": false
+      },
+      "recommendations": [
+        "Implement data retention configuration"
+      ]
+    },
+    {
+      "test_type": "secure_storage",
+      "test_name": "Secure Storage",
+      "success": true,
+      "score": 0.9,
+      "duration_seconds": 0.0017118453979492188,
+      "details": {
+        ".taskmaster_permissions": "755",
+        "data_permissions": "755",
+        "logs_permissions": "755",
+        "potential_data_leaks": 2,
+        "leak_details": [
+          "key in README.md",
+          "key in demo.py"
+        ],
+        "secure_storage_practices": true
+      },
+      "recommendations": [
+        "Minor potential data exposure detected"
+      ]
+    },
+    {
+      "test_type": "concurrent_users",
+      "test_name": "Concurrent Users",
+      "success": true,
+      "score": 1.0,
+      "duration_seconds": 9.964931011199951,
+      "details": {
+        "concurrent_users": 5,
+        "successful_users": 5,
+        "success_rate": 1.0,
+        "avg_response_time": 4.748184013366699,
+        "total_test_time": 9.964923858642578
+      },
+      "recommendations": []
+    },
+    {
+      "test_type": "voice_command_burst",
+      "test_name": "Voice Command Burst",
+      "success": true,
+      "score": 1.0,
+      "duration_seconds": 1.857053279876709,
+      "details": {
+        "total_commands": 8,
+        "successful_commands": 8,
+        "success_rate": 1.0,
+        "avg_response_time": 1.2101427018642426,
+        "max_response_time": 1.825911045074463,
+        "burst_duration": 1.8570423126220703
+      },
+      "recommendations": []
+    },
+    {
+      "test_type": "memory_stress",
+      "test_name": "Memory Stress",
+      "success": true,
+      "score": 1.0,
+      "duration_seconds": 48.60254693031311,
+      "details": {
+        "initial_system_memory_percent": 75.9,
+        "initial_process_memory_mb": 739.203125,
+        "final_system_memory_percent": 75.8,
+        "final_process_memory_mb": 742.4375,
+        "memory_growth_mb": 3.234375,
+        "max_memory_mb": 742.4375,
+        "memory_samples": 10
+      },
+      "recommendations": []
+    }
+  ],
+  "critical_issues": []
+}

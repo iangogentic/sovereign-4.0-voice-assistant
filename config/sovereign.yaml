@@ -1,0 +1,296 @@
+# Sovereign 4.0 Voice Assistant Configuration
+# Environment: development
+# Generated: 2024-01-15T10:30:00Z
+
+# Environment and Metadata
+environment: development
+version: "4.0.0"
+name: "Sovereign Voice Assistant"
+description: "Advanced AI voice assistant with multi-modal capabilities"
+
+# Feature Flags
+features:
+  offline_mode: false
+  memory_enabled: true
+  screen_monitoring: true
+  code_agent: true
+  performance_monitoring: true
+  voice_interruption: false
+  emotion_detection: false
+  multi_language: false
+
+# API Configuration
+# All API keys are loaded from environment variables for security
+api:
+  # Base URLs (can be overridden for custom endpoints)
+  openai_base_url: "https://api.openai.com/v1"
+  anthropic_base_url: "https://api.anthropic.com"
+  openrouter_base_url: "https://openrouter.ai/api/v1"
+  perplexity_base_url: "https://api.perplexity.ai"
+  kimi_base_url: "https://api.moonshot.cn/v1"
+  
+  # Security and performance
+  validate_keys_on_startup: true
+  timeout: 30.0
+  max_retries: 3
+
+# Audio System Configuration
+audio:
+  # Input settings
+  input_device: null  # null for default device
+  sample_rate: 16000  # 16kHz recommended for Whisper
+  chunk_size: 1024
+  channels: 1
+  
+  # Output settings
+  output_device: null  # null for default device
+  output_volume: 0.8
+  
+  # Voice Activity Detection
+  vad_enabled: true
+  silence_threshold: 0.001  # Optimized threshold that works
+  silence_duration: 1.0
+  min_audio_length: 0.3
+  max_audio_length: 30.0
+  
+  # Audio processing
+  noise_reduction: true
+  echo_cancellation: true
+  automatic_gain_control: true
+
+# Speech-to-Text Configuration
+stt:
+  # Primary (cloud) STT
+  primary_provider: "openai"
+  primary_model: "whisper-1"
+  primary_language: "en"
+  
+  # Fallback (local) STT
+  fallback_provider: "whisper-cpp"
+  fallback_model: "tiny.en"
+  fallback_language: "en"
+  
+  # Performance settings
+  timeout: 10.0
+  temperature: 0.0  # Deterministic for speed
+  max_retries: 2
+  
+  # Advanced settings
+  enable_punctuation: true
+  enable_timestamps: false
+  enable_word_timestamps: false
+
+# Text-to-Speech Configuration
+tts:
+  # Primary (cloud) TTS
+  primary_provider: "openai"
+  primary_model: "tts-1"
+  primary_voice: "alloy"
+  primary_speed: 1.0
+  
+  # Fallback (local) TTS
+  fallback_provider: "piper"
+  fallback_voice: "en_US-lessac-medium"
+  fallback_speed: 1.0
+  
+  # Performance settings
+  timeout: 15.0
+  response_format: "mp3"
+  max_retries: 2
+  
+  # Audio quality
+  quality: "standard"  # standard, hd
+  enable_ssml: false
+
+# Language Model Configuration
+llm:
+  # Fast model for quick responses
+  fast:
+    provider: "openrouter"
+    model: "openai/gpt-4o-mini"
+    max_tokens: 500
+    temperature: 0.7
+    timeout: 5.0
+    cost_per_1k_tokens: 0.0002
+    max_requests_per_minute: 1000
+    context_window: 128000
+  
+  # Deep model for complex queries
+  deep:
+    provider: "openrouter"
+    model: "openai/gpt-4o"
+    max_tokens: 2000
+    temperature: 0.7
+    timeout: 30.0
+    cost_per_1k_tokens: 0.005
+    max_requests_per_minute: 500
+    context_window: 128000
+  
+  # Local model for offline mode
+  local:
+    provider: "llama-cpp"
+    model: "gemma-2b-it-q4_0.gguf"
+    max_tokens: 500
+    temperature: 0.7
+    timeout: 10.0
+    cost_per_1k_tokens: 0.0
+    max_requests_per_minute: 1000
+    context_window: 2048
+  
+  # Fallback configuration
+  enable_fallback: true
+  fallback_chain: ["fast", "deep", "local"]
+  max_fallback_attempts: 3
+
+# Memory System Configuration
+memory:
+  # Vector database
+  provider: "chroma"
+  persist_directory: "./data/chroma"
+  collection_name_conversations: "sovereign_conversations"
+  collection_name_screen: "sovereign_screen"
+  
+  # Embeddings
+  embedding_provider: "openai"
+  embedding_model: "text-embedding-3-small"
+  embedding_batch_size: 100
+  
+  # Retrieval
+  retrieval_k: 5
+  similarity_threshold: 0.7
+  max_context_length: 8000
+  
+  # Memory management
+  max_conversations_per_session: 100
+  cleanup_interval_hours: 24
+  enable_memory_compression: true
+
+# Screen Monitoring Configuration
+screen:
+  enabled: true
+  screenshot_interval: 3.0
+  
+  # OCR settings
+  ocr_provider: "tesseract"
+  ocr_language: "eng"
+  ocr_config: "--psm 6"
+  tesseract_path: null  # Auto-detect
+  
+  # Image preprocessing
+  resize_factor: 1.0
+  contrast_enhancement: true
+  noise_reduction: true
+  
+  # Performance
+  max_screen_history: 50
+  enable_ocr_cache: true
+
+# Code Agent Configuration
+code_agent:
+  enabled: true
+  provider: "kimi"
+  model: "kimi-k2"
+  
+  # Trigger patterns
+  trigger_patterns:
+    - "#code"
+    - "code:"
+    - "programming"
+    - "write code"
+    - "debug"
+    - "fix bug"
+  
+  # Model settings
+  max_tokens: 4000
+  temperature: 0.1
+  timeout: 60.0
+  
+  # Context settings
+  max_context_files: 10
+  max_context_size: 50000
+  
+  # Supported file types
+  supported_extensions:
+    - ".py"
+    - ".js"
+    - ".ts"
+    - ".jsx"
+    - ".tsx"
+    - ".java"
+    - ".cpp"
+    - ".c"
+    - ".cs"
+    - ".go"
+    - ".rs"
+    - ".php"
+    - ".rb"
+    - ".swift"
+    - ".kt"
+    - ".html"
+    - ".css"
+    - ".sql"
+
+# Security Configuration
+security:
+  # API key security
+  validate_api_keys: true
+  mask_keys_in_logs: true
+  
+  # Data encryption
+  encrypt_memory: false
+  encryption_key_file: null
+  
+  # Network security
+  require_https: true
+  allowed_hosts:
+    - "localhost"
+    - "127.0.0.1"
+  
+  # Rate limiting
+  enable_rate_limiting: true
+  max_requests_per_minute: 100
+  
+  # Logging security
+  log_user_input: true
+  log_assistant_responses: true
+  sanitize_logs: true
+
+# Performance Monitoring Configuration
+monitoring:
+  enabled: true
+  log_level: "INFO"
+  log_file: "./logs/sovereign.log"
+  
+  # Metrics
+  metrics_enabled: true
+  metrics_port: 8080
+  
+  # Health checks
+  health_check_interval: 30.0
+  health_check_timeout: 5.0
+  
+  # Performance tracking
+  track_latency: true
+  track_memory_usage: true
+  track_cpu_usage: true
+  
+  # Error tracking
+  error_reporting: true
+  max_error_backlog: 100
+
+# Development Configuration
+development:
+  debug_mode: false
+  test_mode: false
+  mock_apis: false
+  
+  # Hot reload
+  enable_hot_reload: true
+  hot_reload_paths:
+    - "config/"
+    - "assistant/"
+  
+  # Development shortcuts
+  skip_audio_init: false
+  use_test_data: false
+  bypass_api_validation: false 

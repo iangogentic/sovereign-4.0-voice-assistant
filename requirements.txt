@@ -1,0 +1,91 @@
+# Core Pipecat and Voice Processing
+pipecat-ai>=0.0.40
+openai>=1.12.0
+
+# Speech Recognition & Text-to-Speech
+whisper-cpp-python>=0.1.0
+piper-tts>=1.2.0
+
+# LLM and AI Models
+llama-cpp-python>=0.2.0
+
+# Memory and Vector Database
+chromadb>=0.4.22
+langchain>=0.1.0
+langchain-community>=0.0.20
+langchain-openai>=0.0.5
+langchain-core>=0.1.0
+
+# Screen Capture and OCR
+mss>=9.0.1
+pytesseract>=0.3.10
+Pillow>=9.0.0
+pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"
+
+# HTTP and API clients
+httpx>=0.24.0
+requests>=2.28.0
+aiohttp>=3.8.0
+watchdog>=2.1.0
+# Performance monitoring dependencies
+psutil>=5.9.0
+GPUtil>=1.4.0
+numpy>=1.21.0
+nltk>=3.8
+sentence-transformers>=2.2.0
+torch>=2.0.0
+
+# Performance testing suite dependencies
+scikit-learn>=1.3.0
+pandas>=2.0.0
+evaluate>=0.4.0
+opencv-python>=4.8.0
+joblib>=1.3.0
+gtts>=2.3.0
+memory-profiler>=0.60.0
+tracemalloc>=0.1.0
+
+# Predictive analytics and alerting dependencies
+prophet>=1.1.5
+tensorflow>=2.13.0
+aiosmtplib>=3.0.0
+slack-sdk>=3.27.0
+scipy>=1.11.0
+
+# Configuration and Environment
+pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# Audio Processing
+pyaudio>=0.2.11
+sounddevice>=0.4.5
+pydub>=0.25.1
+
+# Keyboard Input
+keyboard>=0.13.0
+
+# Async and Utilities
+asyncio-mqtt>=0.13.0
+aiofiles>=23.0.0
+uvloop>=0.17.0
+
+# Offline System Dependencies
+psutil>=5.9.0
+whisper-cpp-python>=0.1.0
+
+# Development and Testing
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+black>=23.0.0
+flake8>=6.0.0
+
+# Dashboard Server Dependencies
+flask>=2.3.0
+flask-socketio>=5.3.0
+flask-cors>=4.0.0
+python-socketio>=5.8.0
+eventlet>=0.33.0
+
+# Monitoring and Logging
+structlog>=23.0.0
+prometheus-client>=0.16.0 

@@ -1,0 +1,12 @@
+{
+  "start_time": 1752382488.189873,
+  "end_time": 1752382507.944413,
+  "duration_hours": 0.0054873722129397924,
+  "total_requests": 3,
+  "total_errors": 0,
+  "avg_latency": 2.4624743461608887,
+  "memory_leak_detected": false,
+  "performance_degradation": false,
+  "metrics_file": "reports/stability/system_metrics_20250713_005507.csv",
+  "performance_file": "reports/stability/performance_20250713_005507.csv"
+}

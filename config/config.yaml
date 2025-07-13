@@ -1,0 +1,190 @@
+# Jarvis-Pipecat Voice Assistant Configuration
+# All API keys should be set via environment variables for security
+
+# Audio Configuration
+audio:
+  # Microphone settings
+  input_device: null  # null for default device, or specify device name/index
+  sample_rate: 16000  # 16kHz recommended for Whisper
+  chunk_size: 1024
+  
+  # Speaker settings
+  output_device: null  # null for default device
+  
+  # Voice Activity Detection
+  vad_enabled: true
+  silence_threshold: 0.01
+  silence_duration: 1.0  # seconds
+
+# Speech-to-Text Configuration
+stt:
+  # Primary (cloud) STT
+  primary:
+    provider: "openai"  # openai, whisper-api
+    model: "whisper-1"
+    language: "en"
+    
+  # Fallback (local) STT
+  fallback:
+    provider: "whisper-cpp"
+    model: "tiny.en"  # tiny.en, base.en, small.en
+    
+  # Performance settings
+  max_audio_length: 30  # seconds
+  timeout: 10  # seconds
+
+# Text-to-Speech Configuration
+tts:
+  # Primary (cloud) TTS
+  primary:
+    provider: "openai"  # openai, elevenlabs
+    model: "tts-1"
+    voice: "alloy"  # alloy, echo, fable, onyx, nova, shimmer
+    speed: 1.0
+    
+  # Fallback (local) TTS
+  fallback:
+    provider: "piper"
+    model: "en_US-lessac-medium"
+    
+  # Performance settings
+  timeout: 15  # seconds
+
+# Large Language Model Configuration
+llm:
+  # Fast LLM for immediate responses
+  fast:
+    provider: "openai"
+    model: "gpt-4o-mini"
+    max_tokens: 150
+    temperature: 0.7
+    timeout: 5  # seconds
+    
+  # Deep LLM for complex queries
+  deep:
+    provider: "openai"
+    model: "gpt-4o"
+    max_tokens: 2000
+    temperature: 0.7
+    timeout: 30  # seconds
+    
+  # Local LLM for offline mode
+  local:
+    provider: "llama-cpp"
+    model: "gemma-2b-it-q4_0.gguf"
+    max_tokens: 200
+    temperature: 0.7
+    context_length: 4096
+
+# Code Agent Configuration
+code_agent:
+  enabled: true
+  provider: "kimi"  # kimi-k2
+  model: "k2-chat"
+  trigger_patterns: ["#code", "code:", "programming"]
+  max_tokens: 1500
+  timeout: 20  # seconds
+
+# Memory System Configuration
+memory:
+  # Vector database settings
+  vector_db:
+    provider: "chroma"
+    collection_name: "jarvis_memory"
+    persist_directory: "./data/chroma"
+    
+  # Embedding settings
+  embeddings:
+    provider: "openai"
+    model: "text-embedding-3-small"
+    
+  # Memory behavior
+  max_context_length: 8000  # tokens
+  similarity_threshold: 0.7
+  max_memories: 10  # per query
+
+# Screen Monitoring Configuration
+screen_monitor:
+  enabled: true
+  screenshot_interval: 3  # seconds
+  
+  # OCR settings
+  ocr:
+    provider: "tesseract"
+    language: "eng"
+    config: "--psm 6"  # Page segmentation mode
+    
+  # Image preprocessing
+  preprocessing:
+    resize_factor: 1.0
+    contrast_enhancement: true
+    noise_reduction: true
+
+# Router Configuration
+router:
+  # Routing logic
+  fast_llm_triggers:
+    - "quick"
+    - "simple"
+    - "what is"
+    - "how do"
+    
+  deep_llm_triggers:
+    - "explain"
+    - "analyze"
+    - "research"
+    - "complex"
+    
+  # Latency targets
+  fast_response_target: 0.8  # seconds
+  deep_response_target: 15.0  # seconds
+
+# Performance and Monitoring
+performance:
+  # Logging
+  log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  log_file: "./logs/jarvis.log"
+  
+  # Metrics
+  metrics_enabled: true
+  metrics_port: 8000
+  
+  # Health checks
+  health_check_interval: 30  # seconds
+
+# Feature Flags
+features:
+  offline_mode: false  # Set to true to force offline mode
+  memory_enabled: true
+  screen_monitoring: true
+  code_agent: true
+  performance_monitoring: true
+  
+  # Experimental features
+  experimental:
+    voice_interruption: false
+    emotion_detection: false
+    multi_language: false
+
+# Security Settings
+security:
+  # API key validation
+  validate_api_keys: true
+  
+  # Data encryption
+  encrypt_memory: false
+  encryption_key_file: "./config/encryption.key"
+  
+  # Network security
+  require_https: true
+  allowed_hosts: ["localhost", "127.0.0.1"]
+
+# Development Settings
+development:
+  debug_mode: false
+  test_mode: false
+  mock_apis: false
+  
+  # Development shortcuts
+  skip_audio_init: false
+  use_test_data: false 

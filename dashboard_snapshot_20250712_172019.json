@@ -1,0 +1,80 @@
+{
+  "timestamp": 1752355219.284821,
+  "datetime": "2025-07-12T17:20:19.284822",
+  "summary": {
+    "performance_status": "good",
+    "average_latency_ms": 455.05,
+    "target_latency_ms": 800.0,
+    "total_sessions": 1,
+    "success_rate": 100.0,
+    "recent_alerts": {
+      "critical": 0,
+      "warning": 0,
+      "info": 0
+    },
+    "uptime_seconds": -9.5367431640625e-07
+  },
+  "metrics": {
+    "audio_capture": {
+      "stage": "audio_capture",
+      "total_calls": 1,
+      "successful_calls": 1,
+      "failed_calls": 0,
+      "success_rate": 100.0,
+      "average_duration": 24.29,
+      "recent_average": 24.29,
+      "min_duration": 24.29,
+      "max_duration": 24.29,
+      "p95_duration": 24.29
+    },
+    "stt_processing": {
+      "stage": "stt_processing",
+      "total_calls": 1,
+      "successful_calls": 1,
+      "failed_calls": 0,
+      "success_rate": 100.0,
+      "average_duration": 151.37,
+      "recent_average": 151.37,
+      "min_duration": 151.37,
+      "max_duration": 151.37,
+      "p95_duration": 151.37
+    },
+    "tts_generation": {
+      "stage": "tts_generation",
+      "total_calls": 1,
+      "successful_calls": 1,
+      "failed_calls": 0,
+      "success_rate": 100.0,
+      "average_duration": 253.15,
+      "recent_average": 253.15,
+      "min_duration": 253.15,
+      "max_duration": 253.15,
+      "p95_duration": 253.15
+    },
+    "audio_playback": {
+      "stage": "audio_playback",
+      "total_calls": 1,
+      "successful_calls": 1,
+      "failed_calls": 0,
+      "success_rate": 100.0,
+      "average_duration": 35.05,
+      "recent_average": 35.05,
+      "min_duration": 35.05,
+      "max_duration": 35.05,
+      "p95_duration": 35.05
+    },
+    "total_round_trip": {
+      "stage": "total_round_trip",
+      "total_calls": 1,
+      "successful_calls": 1,
+      "failed_calls": 0,
+      "success_rate": 100.0,
+      "average_duration": 455.05,
+      "recent_average": 455.05,
+      "min_duration": 455.05,
+      "max_duration": 455.05,
+      "p95_duration": 455.05
+    }
+  },
+  "alerts": []
+}

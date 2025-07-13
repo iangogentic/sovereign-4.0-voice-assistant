@@ -1,0 +1,2 @@
+timestamp,request_count,avg_latency,error_count,success_rate,throughput
+1752382506.941683,3,2.4624743461608887,0,1.0,0.40609516867945467
