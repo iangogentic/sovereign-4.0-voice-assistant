@@ -310,7 +310,7 @@ class SystemHealthMonitor:
         
         # Stop health server
         if self.health_server:
-            await self.health_server.stop()
+            await self.health_server.cleanup()
         
         self.logger.info("Stopped system health monitoring")
     

@@ -1012,6 +1012,9 @@ class SovereignAssistant:
                 if self.metrics_collector:
                     self.metrics_collector.record_request(ComponentType.AUDIO_PLAYBACK.value, success=bool(wav_audio))
                 
+                # Calculate total time for metadata
+                total_time = time.time() - total_start
+                
                 # Step 7: Store conversation in memory
                 await self.memory_manager.store_conversation(
                     user_query=user_text,

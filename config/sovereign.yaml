@@ -24,7 +24,7 @@ features:
   voice_interruption: false
   emotion_detection: false
   multi_language: false
-  realtime_api: false  # Enable OpenAI Realtime API for ultra-low latency
+  realtime_api: true  # Enable OpenAI Realtime API for ultra-low latency
 
 # API Configuration
 # All API keys are loaded from environment variables for security
@@ -302,7 +302,7 @@ performance:
 # Enable this for <300ms response times using OpenAI's new Realtime API
 realtime_api:
   # Core settings
-  enabled: false  # Set to true to enable Realtime API mode
+  enabled: true  # Set to true to enable Realtime API mode
   model: "gpt-4o-realtime-preview-2024-10-01"
   voice: "alloy"  # Options: alloy, echo, fable, onyx, nova, shimmer
   modalities: ["text", "audio"]
