@@ -36,7 +36,7 @@ from assistant.smart_context_manager import SmartContextManager, SmartContextCon
 from assistant.async_response_manager import AsyncResponseManager, AsyncConfig
 from assistant.connection_stability_monitor import ConnectionStabilityMonitor
 from assistant.audio_stream_manager import AudioStreamManager, RealtimeAudioConfig
-from assistant.mode_switch_manager import ModeSwitchManager
+from assistant.mode_switch_manager import ModeManager
 from assistant.performance_optimizer import PerformanceOptimizer
 from tests.fixtures.test_fixtures import *
 

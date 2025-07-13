@@ -34,7 +34,7 @@ except ImportError:
     HAS_ML_LIBRARIES = False
     logging.warning("ML libraries not available. Some accuracy tests will be disabled.")
 
-from .performance_testing import TestResult, PerformanceTestConfig
+from .performance_types import TestResult, PerformanceTestConfig
 
 logger = logging.getLogger(__name__)
 

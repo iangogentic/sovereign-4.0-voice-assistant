@@ -24,10 +24,10 @@ from datetime import datetime, timedelta
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'assistant'))
 
-from config_manager import SovereignConfig, OperationMode, EnvironmentType
-from mode_switch_manager import ModeManager, ModeValidationError, ModeTransitionError
-from fallback_detector import ModeValidator, ValidationSeverity, FailureType
-from dashboard_server import DashboardServer
+from assistant.config_manager import SovereignConfig, OperationMode, EnvironmentType
+from assistant.mode_switch_manager import ModeManager, ModeValidationError, ModeTransitionError
+from assistant.fallback_detector import ModeValidator, ValidationSeverity, FailureType
+from assistant.dashboard_server import DashboardServer
 
 
 class TestModeManagerIntegration:

@@ -50,6 +50,12 @@ prophet>=1.1.5
 tensorflow>=2.13.0
 aiosmtplib>=3.0.0
 
+# InfluxDB for metrics storage
+influxdb-client>=1.49.0
+
+# Job scheduling
+apscheduler>=3.11.0
+
 # =============================================================================
 # Comprehensive Testing Dependencies (Task 18)
 # =============================================================================
@@ -72,7 +78,6 @@ pytest-profiling>=1.7.0
 locust>=2.17.0
 
 # WebSocket and API mocking
-pytest-websockets>=0.3.0
 websockets>=11.0
 aioresponses>=0.7.0
 responses>=0.23.0

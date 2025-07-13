@@ -30,9 +30,6 @@ from assistant.tts import OpenAITTSService
 from assistant.monitoring import PerformanceMonitor
 from assistant.shutdown_manager import ShutdownManager
 
-# Pytest asyncio configuration
-pytest_plugins = ('pytest_asyncio',)
-
 class TestContext:
     """Test context manager for integration tests"""
     
