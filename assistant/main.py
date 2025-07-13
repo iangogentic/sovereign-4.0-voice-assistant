@@ -44,6 +44,10 @@ from .kimi_agent import KimiK2Agent, KimiConfig, create_kimi_agent
 # Import Offline Fallback System for network-independent operation
 from .offline_system import OfflineSystem, OfflineConfig, ConnectivityStatus, create_offline_system
 
+# Import Hybrid Voice System for ultra-low latency Realtime API
+from .hybrid_voice_system import HybridVoiceSystem, HybridConfig, VoiceMode
+from .realtime_voice import RealtimeConfig
+
 # Import comprehensive error handling system
 from .error_handling import (
     ErrorCategory, ErrorContext, VoiceAIException, STTException, LLMException, TTSException,
@@ -186,6 +190,10 @@ class SovereignAssistant:
         self.kimi_agent: Optional[KimiK2Agent] = None
         self.offline_system: Optional[OfflineSystem] = None
         
+        # Hybrid Voice System for ultra-low latency Realtime API
+        self.hybrid_voice_system: Optional[HybridVoiceSystem] = None
+        self.use_realtime_api: bool = False  # Flag to enable Realtime API mode
+        
         # Error handling and monitoring components
         self.health_monitor: Optional[SystemHealthMonitor] = None
         self.degradation_manager: Optional[GracefulDegradationManager] = None
@@ -288,6 +296,9 @@ class SovereignAssistant:
         )
         self.offline_system = create_offline_system(offline_config)
         
+        # Initialize Hybrid Voice System for Realtime API (optional)
+        self._initialize_hybrid_voice_system()
+        
         # Initialize error handling and monitoring components
         self._setup_error_handling()
         
@@ -296,6 +307,58 @@ class SovereignAssistant:
         
         self.services_ready = True
         self.logger.info("✅ Sovereign Voice Assistant services ready!")
+    
+    def _initialize_hybrid_voice_system(self):
+        """Initialize the Hybrid Voice System for Realtime API support"""
+        try:
+            # Check if we should enable Realtime API
+            enable_realtime = os.getenv('ENABLE_REALTIME_API', 'false').lower() == 'true'
+            
+            if not enable_realtime:
+                self.logger.info("🔄 Realtime API disabled - using traditional voice pipeline")
+                return
+            
+            # Configure Realtime API
+            realtime_config = RealtimeConfig(
+                api_key=self.config.api.openai_api_key or os.getenv('OPENAI_API_KEY'),
+                model="gpt-4o-realtime-preview-2024-10-01",
+                voice=self.config.tts.primary_voice or "alloy",
+                instructions="You are Sovereign, an advanced AI voice assistant with screen awareness and memory capabilities. Provide helpful, natural responses.",
+                temperature=0.8,
+                max_context_length=8000,
+                include_screen_content=True,
+                include_memory_context=True
+            )
+            
+            # Configure Hybrid System 
+            hybrid_config = HybridConfig(
+                voice_mode=VoiceMode.HYBRID_AUTO,  # Automatically choose best system
+                max_realtime_failures=3,
+                fallback_on_high_latency=True,
+                max_acceptable_latency=2.0,
+                monitor_performance=True,
+                preserve_context_on_switch=True
+            )
+            
+            # Create Hybrid Voice System
+            self.hybrid_voice_system = HybridVoiceSystem(
+                hybrid_config=hybrid_config,
+                realtime_config=realtime_config,
+                openai_api_key=self.config.api.openai_api_key or os.getenv('OPENAI_API_KEY'),
+                openrouter_api_key=self.config.api.openrouter_api_key or os.getenv('OPENROUTER_API_KEY'),
+                memory_manager=self.memory_manager,
+                screen_watcher=self.screen_watcher,
+                logger=self.logger
+            )
+            
+            self.use_realtime_api = True
+            self.logger.info("✅ Hybrid Voice System initialized - Realtime API available")
+            
+        except Exception as e:
+            self.logger.warning(f"⚠️  Could not initialize Hybrid Voice System: {e}")
+            self.logger.info("🔄 Falling back to traditional voice pipeline")
+            self.hybrid_voice_system = None
+            self.use_realtime_api = False
     
     def _setup_error_handling(self):
         """Set up comprehensive error handling system"""
@@ -622,7 +685,39 @@ class SovereignAssistant:
                         self.metrics_collector.record_request(ComponentType.AUDIO_CAPTURE.value, success=False)
                     return True
                 
-                # Step 2: Process with graceful degradation
+                # Step 2: Try Hybrid Voice System first (if available and enabled)
+                if self.use_realtime_api and self.hybrid_voice_system:
+                    try:
+                        self.logger.info("⚡ Processing with Hybrid Voice System (Realtime API)")
+                        hybrid_start = time.time()
+                        
+                        # Process with hybrid system
+                        result = await self.hybrid_voice_system.process_voice_input(audio_data=audio_data)
+                        
+                        if result and result.get('success'):
+                            hybrid_time = time.time() - hybrid_start
+                            total_time = time.time() - total_start
+                            
+                            self.logger.info(f"⚡ Hybrid Response: {total_time:.2f}s total")
+                            self.logger.info(f"   🎤 Record: {record_time:.2f}s")
+                            self.logger.info(f"   🔄 Hybrid: {hybrid_time:.2f}s")
+                            
+                            # Metrics
+                            if self.metrics_collector:
+                                self.metrics_collector.record_request("hybrid_voice", success=True)
+                            
+                            return True
+                        else:
+                            self.logger.warning("⚠️ Hybrid Voice System failed, falling back to traditional pipeline")
+                            if self.metrics_collector:
+                                self.metrics_collector.record_request("hybrid_voice", success=False)
+                    
+                    except Exception as e:
+                        self.logger.warning(f"⚠️ Hybrid Voice System error: {e}, falling back to traditional pipeline")
+                        if self.metrics_collector:
+                            self.metrics_collector.record_request("hybrid_voice", success=False)
+                
+                # Step 3: Process with graceful degradation (traditional pipeline)
                 if is_offline_mode and self.offline_system and self.offline_system.is_ready_for_offline():
                     self.logger.info("🔌 Processing request in offline mode")
                     
@@ -1187,6 +1282,20 @@ class SovereignAssistant:
                 self.logger.warning(f"⚠️ Offline system initialization failed: {e}")
                 self.offline_system = None
             
+            # Initialize Hybrid Voice System (if enabled)
+            if self.hybrid_voice_system:
+                try:
+                    if await self.hybrid_voice_system.initialize():
+                        self.logger.info("⚡ Hybrid Voice System initialized - Realtime API ready")
+                    else:
+                        self.logger.warning("⚠️ Hybrid Voice System initialization failed - using traditional pipeline")
+                        self.hybrid_voice_system = None
+                        self.use_realtime_api = False
+                except Exception as e:
+                    self.logger.warning(f"⚠️ Hybrid Voice System initialization failed: {e} - using traditional pipeline")
+                    self.hybrid_voice_system = None
+                    self.use_realtime_api = False
+            
             # Start health monitoring
             if self.health_monitor:
                 await self.health_monitor.start(health_server_port=8080)
@@ -1266,6 +1375,11 @@ class SovereignAssistant:
             if self.offline_system:
                 await self.offline_system.cleanup()
             
+            # Cleanup Hybrid Voice System
+            if self.hybrid_voice_system:
+                await self.hybrid_voice_system.cleanup()
+                self.logger.info("⚡ Hybrid Voice System stopped")
+            
             # Stop health monitoring
             if self.health_monitor:
                 await self.health_monitor.stop()
@@ -1338,6 +1452,12 @@ def parse_arguments() -> argparse.Namespace:
         help="Path to log file"
     )
     
+    parser.add_argument(
+        "--realtime",
+        action="store_true",
+        help="Enable OpenAI Realtime API for ultra-low latency responses"
+    )
+    
     return parser.parse_args()
 
 
@@ -1348,6 +1468,10 @@ async def main() -> None:
     
     # Load environment variables
     load_dotenv()
+    
+    # Set realtime API flag if requested
+    if args.realtime:
+        os.environ['ENABLE_REALTIME_API'] = 'true'
     
     # Setup logging
     setup_logging(debug=args.debug, log_file=args.log_file)

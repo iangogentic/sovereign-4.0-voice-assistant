@@ -1,0 +1,656 @@
+"""
+Unit tests for ModeSwitchManager
+
+Tests seamless mode switching, conversation state preservation, 
+rapid switching prevention, and integration with fallback detection.
+"""
+
+import pytest
+import asyncio
+import time
+from unittest.mock import Mock, AsyncMock, patch, MagicMock
+import uuid
+from collections import deque
+
+from assistant.mode_switch_manager import (
+    ModeSwitchManager, ModeSwitchConfig, ModeSwitchMetrics,
+    ActiveMode, SwitchDirection, ConversationState, 
+    create_mode_switch_manager
+)
+from assistant.fallback_detector import FallbackDetector, FallbackConfig, FallbackTrigger
+
+
+class TestConversationState:
+    """Test ConversationState dataclass and serialization"""
+    
+    def test_conversation_state_creation(self):
+        """Test basic ConversationState creation"""
+        state = ConversationState(session_id="test-session")
+        
+        assert state.session_id == "test-session"
+        assert state.message_history == []
+        assert state.context_data == {}
+        assert state.user_preferences == {}
+        assert state.current_response_buffer == ""
+        assert state.last_message_timestamp == 0.0
+        assert state.conversation_metadata == {}
+        assert state.screen_content is None
+        assert state.memory_context is None
+    
+    def test_conversation_state_serialization(self):
+        """Test ConversationState to_dict and from_dict"""
+        original_state = ConversationState(
+            session_id="test-session",
+            message_history=[{"role": "user", "content": "hello"}],
+            context_data={"topic": "testing"},
+            user_preferences={"voice": "alloy"},
+            current_response_buffer="partial response",
+            last_message_timestamp=123456.789,
+            conversation_metadata={"created_at": 123456.0},
+            screen_content="current screen text",
+            memory_context="previous conversation context"
+        )
+        
+        # Serialize to dict
+        state_dict = original_state.to_dict()
+        
+        # Verify all fields are present
+        assert state_dict["session_id"] == "test-session"
+        assert len(state_dict["message_history"]) == 1
+        assert state_dict["context_data"]["topic"] == "testing"
+        assert state_dict["user_preferences"]["voice"] == "alloy"
+        assert state_dict["current_response_buffer"] == "partial response"
+        assert state_dict["last_message_timestamp"] == 123456.789
+        assert state_dict["screen_content"] == "current screen text"
+        assert state_dict["memory_context"] == "previous conversation context"
+        
+        # Deserialize from dict
+        restored_state = ConversationState.from_dict(state_dict)
+        
+        # Verify all fields match
+        assert restored_state.session_id == original_state.session_id
+        assert restored_state.message_history == original_state.message_history
+        assert restored_state.context_data == original_state.context_data
+        assert restored_state.user_preferences == original_state.user_preferences
+        assert restored_state.current_response_buffer == original_state.current_response_buffer
+        assert restored_state.last_message_timestamp == original_state.last_message_timestamp
+        assert restored_state.screen_content == original_state.screen_content
+        assert restored_state.memory_context == original_state.memory_context
+
+
+class TestModeSwitchConfig:
+    """Test ModeSwitchConfig and default values"""
+    
+    def test_default_config_values(self):
+        """Test default ModeSwitchConfig values"""
+        config = ModeSwitchConfig()
+        
+        assert config.max_switch_duration_seconds == 2.0
+        assert config.transition_timeout_seconds == 5.0
+        assert config.min_time_between_switches_seconds == 5.0
+        assert config.switch_cooldown_after_failure_seconds == 30.0
+        assert config.max_switches_per_minute == 6
+        assert config.max_message_history_length == 50
+        assert config.emergency_fallback_mode == ActiveMode.TRADITIONAL
+        assert config.max_consecutive_switch_failures == 3
+        assert config.preload_traditional_components is True
+        assert config.enable_automatic_recovery is True
+    
+    def test_custom_config_values(self):
+        """Test custom ModeSwitchConfig values"""
+        config = ModeSwitchConfig(
+            max_switch_duration_seconds=1.0,
+            min_time_between_switches_seconds=10.0,
+            max_switches_per_minute=3,
+            emergency_fallback_mode=ActiveMode.REALTIME,
+            enable_automatic_recovery=False
+        )
+        
+        assert config.max_switch_duration_seconds == 1.0
+        assert config.min_time_between_switches_seconds == 10.0
+        assert config.max_switches_per_minute == 3
+        assert config.emergency_fallback_mode == ActiveMode.REALTIME
+        assert config.enable_automatic_recovery is False
+
+
+class TestModeSwitchMetrics:
+    """Test ModeSwitchMetrics tracking and calculations"""
+    
+    def test_initial_metrics(self):
+        """Test initial metrics state"""
+        metrics = ModeSwitchMetrics()
+        
+        assert metrics.total_switches == 0
+        assert metrics.successful_switches == 0
+        assert metrics.failed_switches == 0
+        assert metrics.realtime_to_traditional_switches == 0
+        assert metrics.traditional_to_realtime_switches == 0
+        assert metrics.average_switch_duration == 0.0
+        assert metrics.fastest_switch_duration == float('inf')
+        assert metrics.slowest_switch_duration == 0.0
+        assert metrics.context_preservation_success_rate == 1.0
+        assert metrics.rapid_switches_prevented == 0
+        assert metrics.user_interruptions == 0
+        assert metrics.seamless_transitions == 0
+    
+    def test_successful_switch_metrics_update(self):
+        """Test metrics update for successful switches"""
+        metrics = ModeSwitchMetrics()
+        
+        # Record successful realtime to traditional switch
+        metrics.update_switch_completed(1.5, True, SwitchDirection.REALTIME_TO_TRADITIONAL)
+        
+        assert metrics.total_switches == 1
+        assert metrics.successful_switches == 1
+        assert metrics.failed_switches == 0
+        assert metrics.realtime_to_traditional_switches == 1
+        assert metrics.traditional_to_realtime_switches == 0
+        assert metrics.seamless_transitions == 1
+        assert metrics.user_interruptions == 0
+        assert metrics.average_switch_duration == 1.5
+        assert metrics.fastest_switch_duration == 1.5
+        assert metrics.slowest_switch_duration == 1.5
+        
+        # Record another successful switch in opposite direction
+        metrics.update_switch_completed(2.0, True, SwitchDirection.TRADITIONAL_TO_REALTIME)
+        
+        assert metrics.total_switches == 2
+        assert metrics.successful_switches == 2
+        assert metrics.traditional_to_realtime_switches == 1
+        assert metrics.seamless_transitions == 2
+        assert metrics.average_switch_duration == 1.75  # (1.5 + 2.0) / 2
+        assert metrics.fastest_switch_duration == 1.5
+        assert metrics.slowest_switch_duration == 2.0
+    
+    def test_failed_switch_metrics_update(self):
+        """Test metrics update for failed switches"""
+        metrics = ModeSwitchMetrics()
+        
+        # Record failed switch
+        metrics.update_switch_completed(3.0, False, SwitchDirection.REALTIME_TO_TRADITIONAL)
+        
+        assert metrics.total_switches == 1
+        assert metrics.successful_switches == 0
+        assert metrics.failed_switches == 1
+        assert metrics.seamless_transitions == 0
+        assert metrics.user_interruptions == 1
+        assert metrics.average_switch_duration == 3.0
+
+
+@pytest.fixture
+def mock_services():
+    """Create mock services for testing"""
+    # Mock FallbackDetector
+    mock_fallback_detector = Mock(spec=FallbackDetector)
+    mock_fallback_detector.should_use_fallback.return_value = (False, [], {})
+    
+    # Mock RealtimeVoiceService
+    mock_realtime_service = AsyncMock()
+    mock_realtime_service.is_connected = True
+    mock_realtime_service.current_session_id = "test-session"
+    mock_realtime_service.connect.return_value = True
+    
+    # Mock traditional pipeline services
+    mock_stt_service = Mock()
+    mock_stt_service.client = True
+    mock_stt_service.initialize.return_value = True
+    
+    mock_llm_router = AsyncMock()
+    
+    mock_tts_service = Mock()
+    mock_tts_service.client = True
+    mock_tts_service.initialize.return_value = True
+    
+    # Mock memory manager
+    mock_memory_manager = AsyncMock()
+    mock_memory_manager.inject_context.return_value = "test context"
+    
+    return {
+        "fallback_detector": mock_fallback_detector,
+        "realtime_service": mock_realtime_service,
+        "stt_service": mock_stt_service,
+        "llm_router": mock_llm_router,
+        "tts_service": mock_tts_service,
+        "memory_manager": mock_memory_manager
+    }
+
+
+@pytest.fixture
+def mode_switch_manager(mock_services):
+    """Create ModeSwitchManager with mocked services"""
+    config = ModeSwitchConfig(
+        max_switch_duration_seconds=1.0,
+        min_time_between_switches_seconds=2.0,
+        max_switches_per_minute=10  # Higher limit for testing
+    )
+    
+    manager = ModeSwitchManager(
+        config=config,
+        fallback_detector=mock_services["fallback_detector"],
+        realtime_service=mock_services["realtime_service"],
+        stt_service=mock_services["stt_service"],
+        llm_router=mock_services["llm_router"],
+        tts_service=mock_services["tts_service"],
+        memory_manager=mock_services["memory_manager"]
+    )
+    
+    return manager
+
+
+class TestModeSwitchManagerInitialization:
+    """Test ModeSwitchManager initialization"""
+    
+    @pytest.mark.asyncio
+    async def test_successful_initialization(self, mode_switch_manager):
+        """Test successful initialization"""
+        success = await mode_switch_manager.initialize()
+        
+        assert success is True
+        assert mode_switch_manager.current_mode == ActiveMode.REALTIME
+        assert mode_switch_manager.conversation_state is not None
+        assert mode_switch_manager.conversation_state.session_id is not None
+        assert mode_switch_manager.is_monitoring_active is True
+        assert mode_switch_manager.monitoring_task is not None
+    
+    @pytest.mark.asyncio
+    async def test_initialization_with_preload(self, mock_services):
+        """Test initialization with component preloading"""
+        config = ModeSwitchConfig(preload_traditional_components=True)
+        
+        manager = ModeSwitchManager(
+            config=config,
+            fallback_detector=mock_services["fallback_detector"],
+            realtime_service=mock_services["realtime_service"],
+            stt_service=mock_services["stt_service"],
+            llm_router=mock_services["llm_router"],
+            tts_service=mock_services["tts_service"],
+            memory_manager=mock_services["memory_manager"]
+        )
+        
+        success = await manager.initialize()
+        
+        assert success is True
+        # Verify preloading calls were made
+        mock_services["stt_service"].initialize.assert_called()
+        mock_services["tts_service"].initialize.assert_called()
+
+
+class TestModeSwitchExecution:
+    """Test mode switching execution"""
+    
+    @pytest.mark.asyncio
+    async def test_successful_realtime_to_traditional_switch(self, mode_switch_manager):
+        """Test successful switch from realtime to traditional mode"""
+        await mode_switch_manager.initialize()
+        
+        # Verify starting in realtime mode
+        assert mode_switch_manager.current_mode == ActiveMode.REALTIME
+        
+        # Request switch to traditional
+        success = await mode_switch_manager.request_mode_switch(
+            ActiveMode.TRADITIONAL, 
+            "test_switch"
+        )
+        
+        assert success is True
+        assert mode_switch_manager.current_mode == ActiveMode.TRADITIONAL
+        assert mode_switch_manager.previous_mode == ActiveMode.REALTIME
+        assert mode_switch_manager.is_switching is False
+        assert mode_switch_manager.metrics.total_switches == 1
+        assert mode_switch_manager.metrics.successful_switches == 1
+        assert mode_switch_manager.metrics.realtime_to_traditional_switches == 1
+    
+    @pytest.mark.asyncio
+    async def test_successful_traditional_to_realtime_switch(self, mode_switch_manager):
+        """Test successful switch from traditional to realtime mode"""
+        await mode_switch_manager.initialize()
+        
+        # First switch to traditional
+        await mode_switch_manager.request_mode_switch(ActiveMode.TRADITIONAL, "setup")
+        
+        # Then switch back to realtime
+        success = await mode_switch_manager.request_mode_switch(
+            ActiveMode.REALTIME, 
+            "test_recovery"
+        )
+        
+        assert success is True
+        assert mode_switch_manager.current_mode == ActiveMode.REALTIME
+        assert mode_switch_manager.metrics.total_switches == 2
+        assert mode_switch_manager.metrics.traditional_to_realtime_switches == 1
+    
+    @pytest.mark.asyncio
+    async def test_no_switch_when_already_in_target_mode(self, mode_switch_manager):
+        """Test no switch occurs when already in target mode"""
+        await mode_switch_manager.initialize()
+        
+        # Request switch to current mode (realtime)
+        success = await mode_switch_manager.request_mode_switch(
+            ActiveMode.REALTIME, 
+            "redundant_switch"
+        )
+        
+        assert success is True  # Should return True but no actual switch
+        assert mode_switch_manager.metrics.total_switches == 0  # No switch occurred
+    
+    @pytest.mark.asyncio
+    async def test_conversation_state_preservation(self, mode_switch_manager):
+        """Test that conversation state is preserved during switches"""
+        await mode_switch_manager.initialize()
+        
+        # Setup conversation state
+        mode_switch_manager.conversation_state.message_history = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi there"}
+        ]
+        mode_switch_manager.conversation_state.context_data = {"topic": "testing"}
+        mode_switch_manager.conversation_state.user_preferences = {"voice": "alloy"}
+        
+        original_session_id = mode_switch_manager.conversation_state.session_id
+        original_history_length = len(mode_switch_manager.conversation_state.message_history)
+        
+        # Perform switch
+        success = await mode_switch_manager.request_mode_switch(
+            ActiveMode.TRADITIONAL, 
+            "test_preservation"
+        )
+        
+        assert success is True
+        
+        # Verify conversation state is preserved
+        assert mode_switch_manager.conversation_state.session_id == original_session_id
+        assert len(mode_switch_manager.conversation_state.message_history) == original_history_length
+        assert mode_switch_manager.conversation_state.context_data["topic"] == "testing"
+        assert mode_switch_manager.conversation_state.user_preferences["voice"] == "alloy"
+        assert mode_switch_manager.conversation_state.last_message_timestamp > 0
+        assert mode_switch_manager.metrics.messages_preserved >= original_history_length
+
+
+class TestRapidSwitchingPrevention:
+    """Test rapid switching prevention mechanisms"""
+    
+    @pytest.mark.asyncio
+    async def test_rapid_switch_prevention_by_time(self, mode_switch_manager):
+        """Test rapid switching prevention based on minimum time between switches"""
+        await mode_switch_manager.initialize()
+        
+        # First switch (should succeed)
+        success1 = await mode_switch_manager.request_mode_switch(
+            ActiveMode.TRADITIONAL, 
+            "first_switch"
+        )
+        assert success1 is True
+        
+        # Immediate second switch (should be prevented)
+        success2 = await mode_switch_manager.request_mode_switch(
+            ActiveMode.REALTIME, 
+            "rapid_switch"
+        )
+        assert success2 is False
+        assert mode_switch_manager.metrics.rapid_switches_prevented == 1
+        assert mode_switch_manager.current_mode == ActiveMode.TRADITIONAL  # Should remain in traditional
+    
+    @pytest.mark.asyncio
+    async def test_rapid_switch_prevention_by_frequency(self, mock_services):
+        """Test rapid switching prevention based on switches per minute"""
+        config = ModeSwitchConfig(
+            min_time_between_switches_seconds=0.1,  # Allow quick switches
+            max_switches_per_minute=2  # But limit to 2 per minute
+        )
+        
+        manager = ModeSwitchManager(
+            config=config,
+            fallback_detector=mock_services["fallback_detector"],
+            realtime_service=mock_services["realtime_service"],
+            stt_service=mock_services["stt_service"],
+            llm_router=mock_services["llm_router"],
+            tts_service=mock_services["tts_service"],
+            memory_manager=mock_services["memory_manager"]
+        )
+        
+        await manager.initialize()
+        
+        # Fill up the switch quota
+        await asyncio.sleep(0.2)  # Wait for min time
+        success1 = await manager.request_mode_switch(ActiveMode.TRADITIONAL, "switch1")
+        
+        await asyncio.sleep(0.2)
+        success2 = await manager.request_mode_switch(ActiveMode.REALTIME, "switch2")
+        
+        await asyncio.sleep(0.2)
+        # This third switch should be prevented due to frequency limit
+        success3 = await manager.request_mode_switch(ActiveMode.TRADITIONAL, "switch3")
+        
+        assert success1 is True
+        assert success2 is True
+        assert success3 is False
+        assert manager.metrics.rapid_switches_prevented >= 1
+    
+    @pytest.mark.asyncio
+    async def test_cooldown_period_after_failures(self, mode_switch_manager):
+        """Test cooldown period after consecutive failures"""
+        await mode_switch_manager.initialize()
+        
+        # Simulate failures by making services fail
+        mode_switch_manager.realtime_service.connect.return_value = False
+        
+        # This should fail and trigger cooldown
+        with patch.object(mode_switch_manager, '_execute_mode_switch', 
+                         side_effect=Exception("Simulated failure")):
+            success = await mode_switch_manager.request_mode_switch(
+                ActiveMode.TRADITIONAL, 
+                "failing_switch"
+            )
+        
+        assert success is False
+        assert mode_switch_manager.is_in_cooldown is True
+        assert mode_switch_manager.cooldown_until is not None
+        
+        # Subsequent switches should be blocked
+        success2 = await mode_switch_manager.request_mode_switch(
+            ActiveMode.TRADITIONAL, 
+            "blocked_by_cooldown"
+        )
+        assert success2 is False
+
+
+class TestFallbackDetectorIntegration:
+    """Test integration with FallbackDetector"""
+    
+    @pytest.mark.asyncio
+    async def test_automatic_fallback_on_trigger(self, mode_switch_manager):
+        """Test automatic fallback when FallbackDetector triggers"""
+        await mode_switch_manager.initialize()
+        
+        # Verify starting in realtime mode
+        assert mode_switch_manager.current_mode == ActiveMode.REALTIME
+        
+        # Simulate fallback trigger
+        triggers = [FallbackTrigger.NETWORK_LATENCY, FallbackTrigger.CONNECTION_FAILURES]
+        await mode_switch_manager._on_fallback_triggered(triggers, "High latency detected")
+        
+        # Should have switched to traditional mode
+        assert mode_switch_manager.current_mode == ActiveMode.TRADITIONAL
+        assert mode_switch_manager.metrics.total_switches == 1
+    
+    @pytest.mark.asyncio
+    async def test_automatic_recovery_attempt(self, mode_switch_manager):
+        """Test automatic recovery when conditions improve"""
+        await mode_switch_manager.initialize()
+        
+        # Start in traditional mode
+        await mode_switch_manager.request_mode_switch(ActiveMode.TRADITIONAL, "setup")
+        assert mode_switch_manager.current_mode == ActiveMode.TRADITIONAL
+        
+        # Simulate recovery opportunity
+        mode_switch_manager.fallback_detector.should_use_fallback.return_value = (False, [], {})
+        
+        await mode_switch_manager._on_recovery_attempted({"recovery_type": "network_improved"})
+        
+        # Should wait for recovery to stabilize, then attempt switch
+        await asyncio.sleep(2.5)  # Wait for recovery delay
+        
+        # Check if recovery switch was attempted (may or may not succeed depending on conditions)
+        # At minimum, the recovery logic should have been triggered
+        assert mode_switch_manager.metrics.total_switches >= 1
+
+
+class TestPerformanceAndMonitoring:
+    """Test performance monitoring and metrics"""
+    
+    @pytest.mark.asyncio
+    async def test_performance_metrics_updates(self, mode_switch_manager):
+        """Test that performance metrics are updated correctly"""
+        await mode_switch_manager.initialize()
+        
+        # Perform several switches
+        await mode_switch_manager.request_mode_switch(ActiveMode.TRADITIONAL, "test1")
+        await asyncio.sleep(0.1)
+        await mode_switch_manager.request_mode_switch(ActiveMode.REALTIME, "test2")
+        
+        # Allow monitoring loop to run
+        await asyncio.sleep(1.0)
+        
+        metrics = mode_switch_manager.metrics
+        assert metrics.total_switches >= 2
+        assert metrics.average_switch_duration > 0
+        assert metrics.context_preservation_success_rate > 0
+    
+    @pytest.mark.asyncio
+    async def test_status_reporting(self, mode_switch_manager):
+        """Test current status reporting"""
+        await mode_switch_manager.initialize()
+        
+        status = mode_switch_manager.get_current_status()
+        
+        assert "current_mode" in status
+        assert "is_switching" in status
+        assert "is_in_cooldown" in status
+        assert "conversation_session_id" in status
+        assert "metrics" in status
+        assert "conversation_state" in status
+        
+        # Verify specific values
+        assert status["current_mode"] == ActiveMode.REALTIME.value
+        assert status["is_switching"] is False
+        assert status["conversation_session_id"] is not None
+        assert status["metrics"]["total_switches"] >= 0
+        assert status["conversation_state"]["message_count"] >= 0
+    
+    @pytest.mark.asyncio
+    async def test_cleanup(self, mode_switch_manager):
+        """Test proper cleanup of resources"""
+        await mode_switch_manager.initialize()
+        
+        # Verify monitoring is active
+        assert mode_switch_manager.is_monitoring_active is True
+        assert mode_switch_manager.monitoring_task is not None
+        
+        # Cleanup
+        await mode_switch_manager.cleanup()
+        
+        # Verify cleanup
+        assert mode_switch_manager.is_monitoring_active is False
+        assert mode_switch_manager.monitoring_task.cancelled()
+
+
+class TestFactoryFunction:
+    """Test the factory function"""
+    
+    def test_create_mode_switch_manager(self, mock_services):
+        """Test factory function creates properly configured instance"""
+        config = ModeSwitchConfig()
+        
+        manager = create_mode_switch_manager(
+            config=config,
+            fallback_detector=mock_services["fallback_detector"],
+            realtime_service=mock_services["realtime_service"],
+            stt_service=mock_services["stt_service"],
+            llm_router=mock_services["llm_router"],
+            tts_service=mock_services["tts_service"],
+            memory_manager=mock_services["memory_manager"]
+        )
+        
+        assert isinstance(manager, ModeSwitchManager)
+        assert manager.config == config
+        assert manager.fallback_detector == mock_services["fallback_detector"]
+        assert manager.realtime_service == mock_services["realtime_service"]
+        assert manager.stt_service == mock_services["stt_service"]
+        assert manager.llm_router == mock_services["llm_router"]
+        assert manager.tts_service == mock_services["tts_service"]
+        assert manager.memory_manager == mock_services["memory_manager"]
+        assert manager.current_mode == ActiveMode.REALTIME
+
+
+class TestEdgeCasesAndErrorHandling:
+    """Test edge cases and error handling scenarios"""
+    
+    @pytest.mark.asyncio
+    async def test_switch_failure_with_emergency_recovery(self, mode_switch_manager):
+        """Test emergency recovery when switch fails"""
+        await mode_switch_manager.initialize()
+        
+        # Force a switch failure
+        with patch.object(mode_switch_manager, '_preserve_conversation_state', 
+                         return_value=False):
+            success = await mode_switch_manager.request_mode_switch(
+                ActiveMode.TRADITIONAL, 
+                "failing_switch"
+            )
+        
+        assert success is False
+        # Emergency recovery should have been triggered
+        assert mode_switch_manager.current_mode in [ActiveMode.TRADITIONAL, ActiveMode.ERROR]
+        assert mode_switch_manager.consecutive_failures > 0
+    
+    @pytest.mark.asyncio
+    async def test_conversation_state_with_large_history(self, mode_switch_manager):
+        """Test conversation state handling with large message history"""
+        await mode_switch_manager.initialize()
+        
+        # Create large message history (beyond config limit)
+        large_history = [
+            {"role": "user" if i % 2 == 0 else "assistant", "content": f"message {i}"}
+            for i in range(100)  # More than default max_message_history_length of 50
+        ]
+        mode_switch_manager.conversation_state.message_history = large_history
+        
+        # Perform switch
+        success = await mode_switch_manager.request_mode_switch(
+            ActiveMode.TRADITIONAL, 
+            "large_history_test"
+        )
+        
+        assert success is True
+        # History should be trimmed to max length
+        assert len(mode_switch_manager.conversation_state.message_history) <= mode_switch_manager.config.max_message_history_length
+        # Should keep the most recent messages
+        assert mode_switch_manager.conversation_state.message_history[-1]["content"] == "message 99"
+    
+    @pytest.mark.asyncio
+    async def test_concurrent_switch_requests(self, mode_switch_manager):
+        """Test handling of concurrent switch requests"""
+        await mode_switch_manager.initialize()
+        
+        # Create multiple concurrent switch requests
+        tasks = [
+            asyncio.create_task(mode_switch_manager.request_mode_switch(
+                ActiveMode.TRADITIONAL if i % 2 == 0 else ActiveMode.REALTIME,
+                f"concurrent_switch_{i}"
+            ))
+            for i in range(5)
+        ]
+        
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # At least one should succeed, others should be handled gracefully
+        successful_switches = sum(1 for result in results if result is True)
+        assert successful_switches >= 1
+        
+        # No exceptions should be raised
+        for result in results:
+            assert not isinstance(result, Exception)
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"]) 

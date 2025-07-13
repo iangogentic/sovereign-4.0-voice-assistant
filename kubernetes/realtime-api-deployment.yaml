@@ -1,0 +1,663 @@
+# Sovereign Voice Assistant - Realtime API Kubernetes Deployment
+# Comprehensive production deployment manifests for OpenAI Realtime API integration
+
+---
+# Namespace for all Sovereign services
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sovereign
+  labels:
+    app.kubernetes.io/name: sovereign
+    app.kubernetes.io/component: namespace
+
+---
+# ConfigMap for Realtime API configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: realtime-api-config
+  namespace: sovereign
+  labels:
+    app.kubernetes.io/name: sovereign
+    app.kubernetes.io/component: realtime-api
+data:
+  SOVEREIGN_ENV: "production"
+  LOG_LEVEL: "INFO"
+  DEBUG: "false"
+  REALTIME_API_ENABLED: "true"
+  REALTIME_API_MODEL: "gpt-4o-realtime-preview-2024-10-01"
+  REALTIME_API_VOICE: "alloy"
+  REALTIME_API_SAMPLE_RATE: "24000"
+  CHROMA_HOST: "chroma-db-service"
+  CHROMA_PORT: "8000"
+  MAX_WORKERS: "2"
+  MEMORY_LIMIT: "2048"
+  CACHE_SIZE: "500"
+  PROMETHEUS_ENABLED: "true"
+  PROMETHEUS_PORT: "9091"
+
+---
+# Secret for API keys (should be created separately with real values)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: realtime-api-secrets
+  namespace: sovereign
+  labels:
+    app.kubernetes.io/name: sovereign
+    app.kubernetes.io/component: realtime-api
+type: Opaque
+stringData:
+  OPENAI_API_KEY: "sk-proj-your-key-here"
+  ANTHROPIC_API_KEY: "your-anthropic-key-here"
+  OPENROUTER_API_KEY: "your-openrouter-key-here"
+  PERPLEXITY_API_KEY: "your-perplexity-key-here"
+
+---
+# Deployment for Realtime API service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: realtime-api-deployment
+  namespace: sovereign
+  labels:
+    app.kubernetes.io/name: sovereign
+    app.kubernetes.io/component: realtime-api
+    app.kubernetes.io/version: "4.0.0"
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sovereign
+      app.kubernetes.io/component: realtime-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sovereign
+        app.kubernetes.io/component: realtime-api
+        app.kubernetes.io/version: "4.0.0"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9091"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: realtime-api-service-account
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+      - name: realtime-api
+        image: sovereign-assistant:realtime-latest
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        - name: websocket
+          containerPort: 5000
+          protocol: TCP
+        - name: metrics
+          containerPort: 9091
+          protocol: TCP
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        envFrom:
+        - configMapRef:
+            name: realtime-api-config
+        - secretRef:
+            name: realtime-api-secrets
+        resources:
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: http
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /health/live
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 30
+        volumeMounts:
+        - name: data
+          mountPath: /app/data
+        - name: logs
+          mountPath: /app/logs
+        - name: config
+          mountPath: /app/config
+        - name: tmp
+          mountPath: /tmp
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: realtime-api-data-pvc
+      - name: logs
+        emptyDir: {}
+      - name: config
+        emptyDir: {}
+      - name: tmp
+        emptyDir: {}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app.kubernetes.io/component
+                  operator: In
+                  values:
+                  - realtime-api
+              topologyKey: kubernetes.io/hostname
+      tolerations:
+      - key: "app"
+        operator: "Equal"
+        value: "sovereign"
+        effect: "NoSchedule"
+
+---
+# Service Account for Realtime API
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: realtime-api-service-account
+  namespace: sovereign
+  labels:
+    app.kubernetes.io/name: sovereign
+    app.kubernetes.io/component: realtime-api
+
+---
+# ClusterRole for necessary permissions
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: realtime-api-cluster-role
+  labels:
+    app.kubernetes.io/name: sovereign
+    app.kubernetes.io/component: realtime-api
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "endpoints"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets"]
+  verbs: ["get", "list", "watch"]
+
+---
+# ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: realtime-api-cluster-role-binding
+  labels:
+    app.kubernetes.io/name: sovereign
+    app.kubernetes.io/component: realtime-api
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: realtime-api-cluster-role
+subjects:
+- kind: ServiceAccount
+  name: realtime-api-service-account
+  namespace: sovereign
+
+---
+# Persistent Volume Claim for data storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: realtime-api-data-pvc
+  namespace: sovereign
+  labels:
+    app.kubernetes.io/name: sovereign
+    app.kubernetes.io/component: realtime-api
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: fast-ssd
+
+---
+# Service for Realtime API
+apiVersion: v1
+kind: Service
+metadata:
+  name: realtime-api-service
+  namespace: sovereign
+  labels:
+    app.kubernetes.io/name: sovereign
+    app.kubernetes.io/component: realtime-api
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9091"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+    protocol: TCP
+  - name: websocket
+    port: 5000
+    targetPort: websocket
+    protocol: TCP
+  - name: metrics
+    port: 9091
+    targetPort: metrics
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: sovereign
+    app.kubernetes.io/component: realtime-api
+
+---
+# Service for external load balancer (optional)
+apiVersion: v1
+kind: Service
+metadata:
+  name: realtime-api-lb-service
+  namespace: sovereign
+  labels:
+    app.kubernetes.io/name: sovereign
+    app.kubernetes.io/component: realtime-api
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "tcp"
+spec:
+  type: LoadBalancer
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+    protocol: TCP
+  - name: https
+    port: 443
+    targetPort: http
+    protocol: TCP
+  - name: websocket
+    port: 5000
+    targetPort: websocket
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: sovereign
+    app.kubernetes.io/component: realtime-api
+
+---
+# Ingress for HTTP/WebSocket traffic
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: realtime-api-ingress
+  namespace: sovereign
+  labels:
+    app.kubernetes.io/name: sovereign
+    app.kubernetes.io/component: realtime-api
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/websocket-services: "realtime-api-service"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  tls:
+  - hosts:
+    - realtime-api.sovereign.ai
+    secretName: realtime-api-tls
+  rules:
+  - host: realtime-api.sovereign.ai
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: realtime-api-service
+            port:
+              number: 8080
+      - path: /ws
+        pathType: Prefix
+        backend:
+          service:
+            name: realtime-api-service
+            port:
+              number: 5000
+
+---
+# HorizontalPodAutoscaler for automatic scaling
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: realtime-api-hpa
+  namespace: sovereign
+  labels:
+    app.kubernetes.io/name: sovereign
+    app.kubernetes.io/component: realtime-api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: realtime-api-deployment
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+
+---
+# PodDisruptionBudget for high availability
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: realtime-api-pdb
+  namespace: sovereign
+  labels:
+    app.kubernetes.io/name: sovereign
+    app.kubernetes.io/component: realtime-api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sovereign
+      app.kubernetes.io/component: realtime-api
+
+---
+# NetworkPolicy for security
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: realtime-api-network-policy
+  namespace: sovereign
+  labels:
+    app.kubernetes.io/name: sovereign
+    app.kubernetes.io/component: realtime-api
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: sovereign
+      app.kubernetes.io/component: realtime-api
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: nginx-ingress
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 5000
+    - protocol: TCP
+      port: 9091
+  egress:
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443  # HTTPS for OpenAI API
+    - protocol: TCP
+      port: 8000  # Chroma DB
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53
+
+---
+# ServiceMonitor for Prometheus monitoring
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: realtime-api-service-monitor
+  namespace: sovereign
+  labels:
+    app.kubernetes.io/name: sovereign
+    app.kubernetes.io/component: realtime-api
+    prometheus: kube-prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sovereign
+      app.kubernetes.io/component: realtime-api
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+    scheme: http
+
+---
+# PrometheusRule for alerting
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: realtime-api-alerts
+  namespace: sovereign
+  labels:
+    app.kubernetes.io/name: sovereign
+    app.kubernetes.io/component: realtime-api
+    prometheus: kube-prometheus
+spec:
+  groups:
+  - name: realtime-api.rules
+    rules:
+    - alert: RealtimeAPIDown
+      expr: up{job="realtime-api-service"} == 0
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Realtime API is down"
+        description: "Realtime API has been down for more than 5 minutes"
+    
+    - alert: RealtimeAPIHighLatency
+      expr: histogram_quantile(0.95, realtime_api_voice_latency_seconds) > 0.5
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Realtime API high latency"
+        description: "95th percentile latency is above 500ms"
+    
+    - alert: RealtimeAPIHighErrorRate
+      expr: rate(realtime_api_errors_total[5m]) > 0.1
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Realtime API high error rate"
+        description: "Error rate is above 10%"
+    
+    - alert: RealtimeAPIHighCost
+      expr: realtime_api_cost_dollars{period="current_hour"} > 10
+      for: 1m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Realtime API high cost"
+        description: "Hourly cost is above $10"
+    
+    - alert: RealtimeAPIPodCrashLooping
+      expr: rate(kube_pod_container_status_restarts_total{namespace="sovereign",container="realtime-api"}[10m]) > 0.1
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Realtime API pod crash looping"
+        description: "Pod is crash looping"
+
+---
+# Chroma DB Deployment (dependency)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chroma-db-deployment
+  namespace: sovereign
+  labels:
+    app.kubernetes.io/name: sovereign
+    app.kubernetes.io/component: chroma-db
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sovereign
+      app.kubernetes.io/component: chroma-db
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sovereign
+        app.kubernetes.io/component: chroma-db
+    spec:
+      containers:
+      - name: chroma-db
+        image: chromadb/chroma:latest
+        ports:
+        - name: http
+          containerPort: 8000
+        env:
+        - name: CHROMA_SERVER_HOST
+          value: "0.0.0.0"
+        - name: CHROMA_SERVER_PORT
+          value: "8000"
+        resources:
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+        livenessProbe:
+          httpGet:
+            path: /api/v1/heartbeat
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /api/v1/heartbeat
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        volumeMounts:
+        - name: chroma-data
+          mountPath: /chroma/chroma
+      volumes:
+      - name: chroma-data
+        persistentVolumeClaim:
+          claimName: chroma-db-pvc
+
+---
+# Chroma DB Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: chroma-db-service
+  namespace: sovereign
+  labels:
+    app.kubernetes.io/name: sovereign
+    app.kubernetes.io/component: chroma-db
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 8000
+    targetPort: http
+  selector:
+    app.kubernetes.io/name: sovereign
+    app.kubernetes.io/component: chroma-db
+
+---
+# Chroma DB PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: chroma-db-pvc
+  namespace: sovereign
+  labels:
+    app.kubernetes.io/name: sovereign
+    app.kubernetes.io/component: chroma-db
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: fast-ssd 

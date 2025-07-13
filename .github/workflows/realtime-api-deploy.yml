@@ -1,0 +1,515 @@
+name: Realtime API CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - realtime-api-*
+    paths:
+      - 'assistant/realtime_*.py'
+      - 'assistant/cost_optimization_manager.py'
+      - 'docker-compose.yml'
+      - 'Dockerfile'
+      - 'kubernetes/**'
+      - '.github/workflows/realtime-api-deploy.yml'
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'assistant/realtime_*.py'
+      - 'assistant/cost_optimization_manager.py'
+      - 'docker-compose.yml'
+      - 'Dockerfile'
+      - 'kubernetes/**'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/sovereign-assistant
+  KUBERNETES_NAMESPACE: sovereign
+
+jobs:
+  # =============================================================================
+  # Testing Stage - Comprehensive test suite for Realtime API
+  # =============================================================================
+  test-realtime-api:
+    name: Test Realtime API Components
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    services:
+      chroma-db:
+        image: chromadb/chroma:latest
+        ports:
+          - 8000:8000
+        env:
+          CHROMA_SERVER_HOST: 0.0.0.0
+          CHROMA_SERVER_PORT: 8000
+        options: >-
+          --health-cmd "curl -f http://localhost:8000/api/v1/heartbeat"
+          --health-interval 30s
+          --health-timeout 10s
+          --health-retries 3
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+        
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          tesseract-ocr libtesseract-dev \
+          portaudio19-dev libasound2-dev \
+          ffmpeg libgl1-mesa-glx
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov pytest-asyncio pytest-mock
+    
+    - name: Run Realtime API unit tests
+      env:
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY_TEST }}
+        CHROMA_HOST: localhost
+        CHROMA_PORT: 8000
+        PYTEST_TIMEOUT: 300
+      run: |
+        pytest tests/test_realtime_*.py \
+          tests/test_cost_optimization_manager.py \
+          tests/test_enhanced_alert_system.py \
+          -v --cov=assistant --cov-report=xml --cov-report=html \
+          --timeout=300 --durations=10
+    
+    - name: Run health check tests
+      env:
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY_TEST }}
+        CHROMA_HOST: localhost
+        CHROMA_PORT: 8000
+      run: |
+        python -m pytest tests/test_realtime_health_monitor.py -v
+    
+    - name: Upload coverage reports
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: realtime-api
+        name: realtime-api-coverage
+    
+    - name: Generate test report
+      if: always()
+      run: |
+        mkdir -p test-results
+        cp coverage.xml test-results/
+        cp -r htmlcov test-results/ || true
+    
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: test-results-realtime-api
+        path: test-results/
+
+  # =============================================================================
+  # Integration Testing - End-to-end tests with mocked OpenAI API
+  # =============================================================================
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: test-realtime-api
+    timeout-minutes: 45
+    
+    services:
+      chroma-db:
+        image: chromadb/chroma:latest
+        ports:
+          - 8000:8000
+        env:
+          CHROMA_SERVER_HOST: 0.0.0.0
+          CHROMA_SERVER_PORT: 8000
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y tesseract-ocr portaudio19-dev
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest-integration requests-mock
+    
+    - name: Run integration tests
+      env:
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY_TEST }}
+        CHROMA_HOST: localhost
+        CHROMA_PORT: 8000
+        SOVEREIGN_ENV: testing
+      run: |
+        pytest tests/integration/ -v --timeout=600 \
+          -k "realtime or cost_optimization or health"
+    
+    - name: Test Docker build
+      run: |
+        docker build --target testing -t sovereign-assistant:test .
+        docker run --rm --network host \
+          -e OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY_TEST }}" \
+          -e CHROMA_HOST=localhost \
+          sovereign-assistant:test \
+          python -m pytest tests/test_realtime_metrics_collector.py -v
+
+  # =============================================================================
+  # Security Scanning - Container and dependency scanning
+  # =============================================================================
+  security-scan:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    needs: test-realtime-api
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Build Docker image for scanning
+      run: |
+        docker build --target production -t ${{ env.IMAGE_NAME }}:scan .
+    
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ env.IMAGE_NAME }}:scan
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+    
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: 'trivy-results.sarif'
+    
+    - name: Python dependency security check
+      run: |
+        pip install safety
+        safety check --json --output safety-report.json || true
+    
+    - name: Upload security artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-reports
+        path: |
+          trivy-results.sarif
+          safety-report.json
+
+  # =============================================================================
+  # Build and Push - Multi-architecture container builds
+  # =============================================================================
+  build-and-push:
+    name: Build and Push Images
+    runs-on: ubuntu-latest
+    needs: [test-realtime-api, integration-tests, security-scan]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    
+    outputs:
+      image-digest: ${{ steps.build.outputs.digest }}
+      image-tag: ${{ steps.meta.outputs.tags }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=realtime-latest,enable={{is_default_branch}}
+    
+    - name: Build and push Docker image
+      id: build
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        target: production
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        build-args: |
+          BUILD_VERSION=${{ github.sha }}
+          BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          VCS_REF=${{ github.sha }}
+
+  # =============================================================================
+  # Deploy to Staging - Kubernetes deployment to staging environment
+  # =============================================================================
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/develop'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Configure kubectl
+      uses: azure/k8s-set-context@v3
+      with:
+        method: kubeconfig
+        kubeconfig: ${{ secrets.KUBE_CONFIG_STAGING }}
+    
+    - name: Create namespace if not exists
+      run: |
+        kubectl create namespace ${{ env.KUBERNETES_NAMESPACE }}-staging --dry-run=client -o yaml | kubectl apply -f -
+    
+    - name: Deploy to staging
+      run: |
+        # Update image in Kubernetes manifests
+        sed -i "s|sovereign-assistant:realtime-latest|${{ needs.build-and-push.outputs.image-tag }}|g" kubernetes/realtime-api-deployment.yaml
+        
+        # Apply Kubernetes manifests
+        kubectl apply -f kubernetes/realtime-api-deployment.yaml -n ${{ env.KUBERNETES_NAMESPACE }}-staging
+    
+    - name: Wait for deployment
+      run: |
+        kubectl rollout status deployment/realtime-api-deployment -n ${{ env.KUBERNETES_NAMESPACE }}-staging --timeout=600s
+    
+    - name: Run smoke tests
+      run: |
+        # Get service endpoint
+        SERVICE_IP=$(kubectl get service realtime-api-service -n ${{ env.KUBERNETES_NAMESPACE }}-staging -o jsonpath='{.status.loadBalancer.ingress[0].ip}' || kubectl get service realtime-api-service -n ${{ env.KUBERNETES_NAMESPACE }}-staging -o jsonpath='{.spec.clusterIP}')
+        
+        # Run health checks
+        curl -f http://$SERVICE_IP:8080/health || exit 1
+        curl -f http://$SERVICE_IP:8080/health/realtime || exit 1
+        curl -f http://$SERVICE_IP:8080/metrics/realtime || exit 1
+    
+    - name: Notify deployment status
+      if: always()
+      run: |
+        echo "Deployment ${{ job.status }} completed"
+        # Slack notification would be configured here
+
+  # =============================================================================
+  # Deploy to Production - Blue-green deployment with rollback capability
+  # =============================================================================
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Configure kubectl
+      uses: azure/k8s-set-context@v3
+      with:
+        method: kubeconfig
+        kubeconfig: ${{ secrets.KUBE_CONFIG_PRODUCTION }}
+    
+    - name: Store current deployment for rollback
+      run: |
+        kubectl get deployment realtime-api-deployment -n ${{ env.KUBERNETES_NAMESPACE }} -o yaml > deployment-backup.yaml || echo "No existing deployment"
+        
+        # Store current image
+        CURRENT_IMAGE=$(kubectl get deployment realtime-api-deployment -n ${{ env.KUBERNETES_NAMESPACE }} -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "none")
+        echo "ROLLBACK_IMAGE=$CURRENT_IMAGE" >> $GITHUB_ENV
+    
+    - name: Create namespace if not exists
+      run: |
+        kubectl create namespace ${{ env.KUBERNETES_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+    
+    - name: Deploy to production
+      run: |
+        # Update image in Kubernetes manifests
+        sed -i "s|sovereign-assistant:realtime-latest|${{ needs.build-and-push.outputs.image-tag }}|g" kubernetes/realtime-api-deployment.yaml
+        
+        # Apply Kubernetes manifests
+        kubectl apply -f kubernetes/realtime-api-deployment.yaml -n ${{ env.KUBERNETES_NAMESPACE }}
+    
+    - name: Wait for deployment with timeout
+      id: deployment
+      run: |
+        kubectl rollout status deployment/realtime-api-deployment -n ${{ env.KUBERNETES_NAMESPACE }} --timeout=900s
+      continue-on-error: true
+    
+    - name: Comprehensive health checks
+      id: health_check
+      run: |
+        # Wait for pods to be ready
+        sleep 30
+        
+        # Get service endpoint
+        SERVICE_IP=$(kubectl get service realtime-api-service -n ${{ env.KUBERNETES_NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}' || kubectl get service realtime-api-service -n ${{ env.KUBERNETES_NAMESPACE }} -o jsonpath='{.spec.clusterIP}')
+        
+        # Comprehensive health checks
+        echo "Testing basic health endpoint..."
+        curl -f http://$SERVICE_IP:8080/health --max-time 10 || exit 1
+        
+        echo "Testing realtime health endpoint..."
+        curl -f http://$SERVICE_IP:8080/health/realtime --max-time 10 || exit 1
+        
+        echo "Testing metrics endpoint..."
+        curl -f http://$SERVICE_IP:8080/metrics/realtime --max-time 10 || exit 1
+        
+        echo "Testing readiness probe..."
+        curl -f http://$SERVICE_IP:8080/health/ready --max-time 10 || exit 1
+        
+        echo "Testing liveness probe..."
+        curl -f http://$SERVICE_IP:8080/health/live --max-time 10 || exit 1
+        
+        echo "All health checks passed!"
+      continue-on-error: true
+    
+    - name: Performance validation
+      id: performance_check
+      run: |
+        # Get service endpoint
+        SERVICE_IP=$(kubectl get service realtime-api-service -n ${{ env.KUBERNETES_NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}' || kubectl get service realtime-api-service -n ${{ env.KUBERNETES_NAMESPACE }} -o jsonpath='{.spec.clusterIP}')
+        
+        # Check response times
+        echo "Checking response times..."
+        RESPONSE_TIME=$(curl -o /dev/null -s -w "%{time_total}" http://$SERVICE_IP:8080/health)
+        
+        # Validate response time is under 5 seconds
+        if (( $(echo "$RESPONSE_TIME > 5.0" | bc -l) )); then
+          echo "Response time too high: ${RESPONSE_TIME}s"
+          exit 1
+        fi
+        
+        echo "Response time acceptable: ${RESPONSE_TIME}s"
+      continue-on-error: true
+    
+    - name: Rollback on failure
+      if: |
+        steps.deployment.outcome == 'failure' || 
+        steps.health_check.outcome == 'failure' || 
+        steps.performance_check.outcome == 'failure'
+      run: |
+        echo "Deployment failed, initiating rollback..."
+        
+        if [ "${{ env.ROLLBACK_IMAGE }}" != "none" ]; then
+          echo "Rolling back to previous image: ${{ env.ROLLBACK_IMAGE }}"
+          kubectl set image deployment/realtime-api-deployment realtime-api=${{ env.ROLLBACK_IMAGE }} -n ${{ env.KUBERNETES_NAMESPACE }}
+          kubectl rollout status deployment/realtime-api-deployment -n ${{ env.KUBERNETES_NAMESPACE }} --timeout=300s
+        else
+          echo "No previous deployment found, scaling down..."
+          kubectl scale deployment realtime-api-deployment --replicas=0 -n ${{ env.KUBERNETES_NAMESPACE }}
+        fi
+        
+        exit 1
+    
+    - name: Update deployment annotations
+      if: success()
+      run: |
+        kubectl annotate deployment realtime-api-deployment -n ${{ env.KUBERNETES_NAMESPACE }} \
+          deployment.kubernetes.io/revision-history="${{ github.sha }}" \
+          deployment.kubernetes.io/change-cause="GitHub Actions deployment from commit ${{ github.sha }}" \
+          --overwrite
+    
+    - name: Store deployment artifacts
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: deployment-artifacts-${{ github.sha }}
+        path: |
+          deployment-backup.yaml
+          kubernetes/realtime-api-deployment.yaml
+    
+    - name: Notify production deployment
+      if: always()
+      run: |
+        echo "Production deployment ${{ job.status }}!"
+        echo "Image: ${{ needs.build-and-push.outputs.image-tag }}"
+        echo "Commit: ${{ github.sha }}"
+        # Slack notification would be configured here
+
+  # =============================================================================
+  # Post-deployment monitoring and alerting setup
+  # =============================================================================
+  setup-monitoring:
+    name: Setup Monitoring
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    if: github.ref == 'refs/heads/main' && success()
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Configure kubectl
+      uses: azure/k8s-set-context@v3
+      with:
+        method: kubeconfig
+        kubeconfig: ${{ secrets.KUBE_CONFIG_PRODUCTION }}
+    
+    - name: Apply monitoring configurations
+      run: |
+        # Apply ServiceMonitor and PrometheusRule
+        kubectl apply -f kubernetes/realtime-api-deployment.yaml -n ${{ env.KUBERNETES_NAMESPACE }}
+        
+        # Wait for monitoring to be configured
+        sleep 30
+    
+    - name: Verify monitoring setup
+      run: |
+        # Check if ServiceMonitor was created
+        kubectl get servicemonitor realtime-api-service-monitor -n ${{ env.KUBERNETES_NAMESPACE }}
+        
+        # Check if PrometheusRule was created
+        kubectl get prometheusrule realtime-api-alerts -n ${{ env.KUBERNETES_NAMESPACE }}
+        
+        echo "Monitoring setup completed successfully"
+
+  # =============================================================================
+  # Cleanup - Remove old images and artifacts
+  # =============================================================================
+  cleanup:
+    name: Cleanup Old Artifacts
+    runs-on: ubuntu-latest
+    needs: [deploy-production, setup-monitoring]
+    if: always() && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Delete old container images
+      run: |
+        # Keep last 5 images, delete older ones
+        echo "Cleanup completed (placeholder)"
+        # Implementation would depend on your container registry
+    
+    - name: Delete old deployment artifacts
+      run: |
+        # Keep last 10 deployment artifacts
+        echo "Artifact cleanup completed (placeholder)" 

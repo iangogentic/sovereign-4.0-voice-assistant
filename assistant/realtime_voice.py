@@ -1,6 +1,7 @@
 """
 OpenAI Realtime API integration for Sovereign 4.0
 Provides ultra-low latency speech-to-speech conversation
+Enhanced for seamless integration with existing systems
 """
 
 import asyncio
@@ -9,23 +10,35 @@ import json
 import os
 import time
 import logging
-from typing import Optional, Dict, Any, Callable, AsyncGenerator
+from typing import Optional, Dict, Any, Callable, AsyncGenerator, List
 import websockets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import pyaudio
 import wave
 import threading
 from queue import Queue
 import io
 import ssl
+from datetime import datetime
+
+from .audio_stream_manager import AudioStreamManager, RealtimeAudioConfig, create_realtime_audio_manager
+from .realtime_session_manager import (
+    RealtimeSessionManager, SessionConfig, SessionState, 
+    ConversationItemType, create_session_manager
+)
+from .realtime_error_handler import (
+    RealtimeErrorHandler, RecoveryConfig, ErrorCategory,
+    ErrorSeverity, RecoveryStrategy, create_error_handler
+)
+
 
 @dataclass
 class RealtimeConfig:
-    """Configuration for OpenAI Realtime API"""
+    """Enhanced configuration for OpenAI Realtime API"""
     api_key: str
     model: str = "gpt-4o-realtime-preview"  # or gpt-4o-mini-realtime-preview for speed
     voice: str = "alloy"  # alloy, echo, fable, onyx, nova, shimmer
-    instructions: str = "You are a helpful AI assistant with screen awareness capabilities."
+    instructions: str = "You are Sovereign, an advanced AI voice assistant with screen awareness and memory capabilities. Provide helpful, natural responses."
     temperature: float = 0.8
     max_response_output_tokens: str = "inf"
     
@@ -39,44 +52,127 @@ class RealtimeConfig:
     vad_threshold: float = 0.5
     vad_prefix_padding_ms: int = 300
     vad_silence_duration_ms: int = 200
+    
+    # Connection settings
+    connection_timeout: int = 30
+    max_reconnect_attempts: int = 5
+    initial_retry_delay: float = 1.0
+    max_retry_delay: float = 30.0
+    
+    # Context settings
+    max_context_length: int = 8000  # Token limit for context injection
+    include_screen_content: bool = True
+    include_memory_context: bool = True
+    context_refresh_interval: float = 5.0  # Seconds
+
+@dataclass
+class ConversationMetrics:
+    """Track conversation performance metrics"""
+    session_start: datetime = field(default_factory=datetime.now)
+    total_turns: int = 0
+    total_audio_sent: int = 0
+    total_audio_received: int = 0
+    average_response_time: float = 0.0
+    connection_count: int = 0
+    error_count: int = 0
+    fallback_count: int = 0
+    last_response_time: float = 0.0
 
 
 class RealtimeVoiceService:
     """
-    OpenAI Realtime API service for ultra-low latency voice conversations
+    Enhanced OpenAI Realtime API service for ultra-low latency voice conversations
     Replaces the traditional STT→LLM→TTS pipeline with direct speech-to-speech
+    Seamlessly integrates with existing Sovereign 4.0 infrastructure
     """
     
-    def __init__(self, config: RealtimeConfig, memory_manager=None, screen_content_provider=None):
+    def __init__(self, config: RealtimeConfig, memory_manager=None, screen_content_provider=None, logger=None):
         self.config = config
         self.memory_manager = memory_manager
         self.screen_content_provider = screen_content_provider
-        self.logger = logging.getLogger(__name__)
+        self.logger = logger or logging.getLogger(__name__)
         
         # Connection state
         self.websocket: Optional[websockets.WebSocketServerProtocol] = None
         self.session_id: Optional[str] = None
-        self.is_connected = False
-        self.is_recording = False
+        self.is_connected: bool = False
+        self.is_running: bool = False
+        self.connection_lock = asyncio.Lock()
         
-        # Audio handling
-        self.audio_in_queue = Queue()
-        self.audio_out_queue = Queue()
-        self.pyaudio_instance = None
-        self.input_stream = None
-        self.output_stream = None
+        # Audio streaming with AudioStreamManager
+        self.audio_stream_manager: Optional[AudioStreamManager] = None
+        self.audio_config = RealtimeAudioConfig(
+            sample_rate=config.sample_rate,
+            input_chunk_size=1024,
+            output_chunk_size=1024,
+            buffer_duration=0.1,
+            target_latency_ms=50.0
+        )
+        
+        # Session management
+        self.session_manager: Optional[RealtimeSessionManager] = None
+        self.current_session_id: Optional[str] = None
+        self.session_config = SessionConfig(
+            database_path="data/realtime_sessions.db",
+            session_timeout_minutes=30,
+            max_concurrent_sessions=10,
+            max_recovery_attempts=3
+        )
+        
+        # Error handling
+        self.error_handler: Optional[RealtimeErrorHandler] = None
+        self.recovery_config = RecoveryConfig(
+            max_connection_retries=5,
+            max_audio_retries=3,
+            max_api_retries=3,
+            enable_graceful_degradation=True,
+            enable_fallback_to_text=True,
+            error_notification_threshold=5
+        )
+        
+        # Context management
+        self.current_context: Optional[str] = None
+        self.last_context_update: float = 0
+        
+        # Metrics and monitoring
+        self.metrics = ConversationMetrics()
+        self.response_start_time: Optional[float] = None
         
         # Event handlers
-        self.on_response_received: Optional[Callable] = None
+        self.on_response_generated: Optional[Callable] = None
         self.on_error: Optional[Callable] = None
+        self.on_connection_status: Optional[Callable] = None
         
     async def initialize(self) -> bool:
         """Initialize the Realtime service"""
         try:
             self.logger.info("🚀 Initializing OpenAI Realtime API service...")
             
-            # Initialize PyAudio for local audio handling
-            self.pyaudio_instance = pyaudio.PyAudio()
+            # Initialize Audio Stream Manager for real-time streaming
+            self.audio_stream_manager = create_realtime_audio_manager(self.audio_config)
+            if not self.audio_stream_manager.initialize():
+                raise RuntimeError("Failed to initialize Audio Stream Manager")
+            
+            # Initialize Session Manager
+            self.session_manager = create_session_manager(self.session_config)
+            if not await self.session_manager.initialize():
+                raise RuntimeError("Failed to initialize Session Manager")
+            
+            # Set up session event callbacks
+            self.session_manager.on_session_created = self._on_session_created
+            self.session_manager.on_session_expired = self._on_session_expired
+            self.session_manager.on_session_recovered = self._on_session_recovered
+            self.session_manager.on_session_error = self._on_session_error
+            
+            # Initialize Error Handler
+            self.error_handler = create_error_handler(self.recovery_config)
+            
+            # Set up error event callbacks
+            self.error_handler.on_error = self._on_error_occurred
+            self.error_handler.on_recovery_success = self._on_recovery_success
+            self.error_handler.on_recovery_failure = self._on_recovery_failure
+            self.error_handler.on_degradation = self._on_degradation_event
+            self.error_handler.on_critical_error = self._on_critical_error
             
             # Test API key
             if not self.config.api_key:
@@ -88,6 +184,87 @@ class RealtimeVoiceService:
         except Exception as e:
             self.logger.error(f"❌ Failed to initialize Realtime service: {e}")
             return False
+    
+    async def _on_session_created(self, session_id: str, session_metadata):
+        """Handle session creation event"""
+        self.logger.info(f"🆕 Session created: {session_id}")
+        self.current_session_id = session_id
+        
+    async def _on_session_expired(self, session_id: str):
+        """Handle session expiration event"""
+        self.logger.warning(f"⏰ Session expired: {session_id}")
+        if self.current_session_id == session_id:
+            self.current_session_id = None
+            
+    async def _on_session_recovered(self, session_id: str):
+        """Handle session recovery event"""
+        self.logger.info(f"🔄 Session recovered: {session_id}")
+        
+    async def _on_session_error(self, session_id: str, error_info):
+        """Handle session error event"""
+        self.logger.error(f"❌ Session error in {session_id}: {error_info}")
+        if self.current_session_id == session_id:
+            # Attempt recovery or fallback
+            if self.session_manager:
+                recovery_success = await self.session_manager.attempt_session_recovery(session_id)
+                if not recovery_success:
+                    self.current_session_id = None
+    
+    async def _on_error_occurred(self, error_info):
+        """Handle error occurrence event"""
+        self.logger.warning(f"🚨 Error occurred: {error_info.category.value} - {error_info.user_message}")
+        
+        # Update metrics
+        self.metrics.error_count += 1
+        
+        # Notify user of error if user-friendly message exists
+        if error_info.user_message and self.on_error:
+            await self.on_error(error_info.user_message)
+    
+    async def _on_recovery_success(self, error_info):
+        """Handle successful error recovery"""
+        self.logger.info(f"✅ Recovery successful for {error_info.category.value}")
+        
+        # Reset error count on successful recovery
+        if self.error_handler:
+            await self.error_handler.reset_error_state(error_info.category)
+    
+    async def _on_recovery_failure(self, error_info, failure_reason):
+        """Handle failed error recovery"""
+        self.logger.error(f"❌ Recovery failed for {error_info.category.value}: {failure_reason}")
+        
+        # Increment fallback count
+        self.metrics.fallback_count += 1
+        
+        # Consider more drastic measures
+        if error_info.category in [ErrorCategory.CONNECTION_ERROR, ErrorCategory.AUTHENTICATION_ERROR]:
+            await self.disconnect()
+    
+    async def _on_degradation_event(self, degradation_type, message):
+        """Handle degradation event"""
+        self.logger.warning(f"📉 Degradation activated: {degradation_type} - {message}")
+        
+        # Update degradation state
+        if degradation_type == "audio_quality":
+            # Reduce audio quality in audio stream manager
+            if self.audio_stream_manager:
+                # Audio quality reduction would be implemented in audio stream manager
+                pass
+        elif degradation_type == "text_mode":
+            # Switch to text-only mode
+            self.logger.info("💬 Switching to text-only mode due to persistent issues")
+    
+    async def _on_critical_error(self, error_info):
+        """Handle critical error event"""
+        self.logger.error(f"🚨 CRITICAL ERROR: {error_info.message}")
+        
+        # For critical errors, we may need to terminate the session
+        if error_info.category == ErrorCategory.AUTHENTICATION_ERROR:
+            self.logger.critical("🔒 Authentication failed - terminating session")
+            await self.disconnect()
+        elif error_info.user_message == "System experiencing high error rate. Please try again later.":
+            self.logger.critical("⚡ High error rate detected - considering service restart")
+            # Could trigger service restart or maintenance mode
     
     async def connect(self) -> bool:
         """Connect to OpenAI Realtime API via WebSocket"""
@@ -110,6 +287,17 @@ class RealtimeVoiceService:
             self.websocket = await websockets.connect(url, extra_headers=headers, ssl=ssl_context)
             self.is_connected = True
             
+            # Create new session in session manager
+            if self.session_manager:
+                self.current_session_id = await self.session_manager.create_session(
+                    model=self.config.model,
+                    voice=self.config.voice,
+                    instructions=self.config.instructions,
+                    temperature=self.config.temperature,
+                    max_response_output_tokens=self.config.max_response_output_tokens
+                )
+                await self.session_manager.update_session_state(self.current_session_id, SessionState.CONNECTED)
+            
             # Start message handling
             asyncio.create_task(self._handle_messages())
             
@@ -122,6 +310,15 @@ class RealtimeVoiceService:
         except Exception as e:
             self.logger.error(f"❌ Failed to connect to Realtime API: {e}")
             self.is_connected = False
+            
+            # Handle error through error handler
+            if self.error_handler:
+                await self.error_handler.handle_error(e, {
+                    "session_id": self.current_session_id,
+                    "operation": "connect",
+                    "url": "wss://api.openai.com/v1/realtime"
+                })
+            
             return False
     
     async def _configure_session(self):
@@ -176,94 +373,71 @@ class RealtimeVoiceService:
         try:
             self.logger.info("🎤 Starting real-time conversation mode...")
             
-            # Start audio input/output streams
-            await self._start_audio_streams()
+            # Start real-time audio streams with AudioStreamManager
+            await self._start_realtime_audio_streams()
             
-            # Start audio processing tasks
-            asyncio.create_task(self._process_audio_input())
-            asyncio.create_task(self._process_audio_output())
+            # Start message handling
+            asyncio.create_task(self._handle_messages())
             
-            self.is_recording = True
+            self.is_running = True
             self.logger.info("✅ Real-time conversation active!")
             
         except Exception as e:
             self.logger.error(f"❌ Failed to start conversation: {e}")
     
-    async def _start_audio_streams(self):
-        """Start PyAudio input and output streams"""
+    async def _start_realtime_audio_streams(self):
+        """Start real-time audio streams using AudioStreamManager"""
         try:
-            # Input stream (microphone)
-            self.input_stream = self.pyaudio_instance.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=self.config.sample_rate,
-                input=True,
-                frames_per_buffer=1024,
-                stream_callback=self._audio_input_callback
-            )
+            if not self.audio_stream_manager:
+                raise RuntimeError("AudioStreamManager not initialized")
             
-            # Output stream (speakers)
-            self.output_stream = self.pyaudio_instance.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=self.config.sample_rate,
-                output=True,
-                frames_per_buffer=1024,
-                stream_callback=self._audio_output_callback
-            )
+            # Start input stream with callback
+            if not self.audio_stream_manager.start_input_stream(self._on_audio_input):
+                raise RuntimeError("Failed to start input stream")
             
-            self.input_stream.start_stream()
-            self.output_stream.start_stream()
+            # Start output stream with callback
+            if not self.audio_stream_manager.start_output_stream(self._on_audio_output_request):
+                raise RuntimeError("Failed to start output stream")
+            
+            self.logger.info("🎵 Real-time audio streams started successfully")
             
         except Exception as e:
-            self.logger.error(f"❌ Failed to start audio streams: {e}")
+            self.logger.error(f"❌ Failed to start real-time audio streams: {e}")
             raise
     
-    def _audio_input_callback(self, in_data, frame_count, time_info, status):
-        """Callback for audio input stream"""
-        if self.is_recording and in_data:
-            self.audio_in_queue.put(in_data)
-        return (None, pyaudio.paContinue)
-    
-    def _audio_output_callback(self, in_data, frame_count, time_info, status):
-        """Callback for audio output stream"""
+    def _on_audio_input(self, audio_data: bytes):
+        """Callback for real-time audio input from AudioStreamManager"""
         try:
-            if not self.audio_out_queue.empty():
-                return (self.audio_out_queue.get(), pyaudio.paContinue)
-            else:
-                # Return silence if no audio available
-                silence = b'\x00' * (frame_count * 2)  # 16-bit mono
-                return (silence, pyaudio.paContinue)
-        except:
-            silence = b'\x00' * (frame_count * 2)
-            return (silence, pyaudio.paContinue)
-    
-    async def _process_audio_input(self):
-        """Process microphone input and send to Realtime API"""
-        while self.is_connected and self.is_recording:
-            try:
-                if not self.audio_in_queue.empty():
-                    audio_chunk = self.audio_in_queue.get()
-                    
-                    # Convert to base64 and send to API
-                    audio_base64 = base64.b64encode(audio_chunk).decode('utf-8')
-                    
-                    message = {
-                        "type": "input_audio_buffer.append",
-                        "audio": audio_base64
-                    }
-                    
-                    await self._send_message(message)
+            if self.is_running and self.websocket:
+                # Convert to base64 and send to Realtime API
+                audio_base64 = base64.b64encode(audio_data).decode('utf-8')
                 
-                await asyncio.sleep(0.01)  # Small delay to prevent overwhelming
+                message = {
+                    "type": "input_audio_buffer.append",
+                    "audio": audio_base64
+                }
                 
-            except Exception as e:
-                self.logger.error(f"❌ Error processing audio input: {e}")
+                # Schedule async message sending
+                asyncio.create_task(self._send_message(message))
+                
+                # Update metrics
+                self.metrics.total_audio_sent += len(audio_data)
+                
+        except Exception as e:
+            self.logger.error(f"❌ Error in audio input callback: {e}")
     
-    async def _process_audio_output(self):
-        """Process audio output from Realtime API"""
-        # Audio output is handled in the message handler
-        pass
+    def _on_audio_output_request(self) -> Optional[bytes]:
+        """Callback for real-time audio output request from AudioStreamManager"""
+        try:
+            # This will be populated by _handle_audio_delta when receiving audio from API
+            # For now, return None (silence will be handled by AudioStreamManager)
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error in audio output callback: {e}")
+            return None
+    
+    # Audio processing methods removed - now handled by AudioStreamManager callbacks
     
     async def _handle_messages(self):
         """Handle incoming messages from Realtime API"""
@@ -278,9 +452,23 @@ class RealtimeVoiceService:
         except websockets.exceptions.ConnectionClosed:
             self.logger.info("🔌 WebSocket connection closed")
             self.is_connected = False
+            
+            # Handle connection closed through error handler
+            if self.error_handler:
+                await self.error_handler.handle_error(
+                    ConnectionError("WebSocket connection closed"),
+                    {"session_id": self.current_session_id, "operation": "message_handling"}
+                )
         except Exception as e:
             self.logger.error(f"❌ Error handling messages: {e}")
             self.is_connected = False
+            
+            # Handle error through error handler
+            if self.error_handler:
+                await self.error_handler.handle_error(e, {
+                    "session_id": self.current_session_id,
+                    "operation": "message_handling"
+                })
     
     async def _process_message(self, data: Dict[str, Any]):
         """Process individual message from Realtime API"""
@@ -294,11 +482,25 @@ class RealtimeVoiceService:
             self.logger.info("✅ Session updated")
         
         elif message_type == "response.audio.delta":
-            # Receive audio response and queue for playback
+            # Receive audio response and send to AudioStreamManager for playback
             audio_base64 = data.get("delta", "")
             if audio_base64:
                 audio_bytes = base64.b64decode(audio_base64)
-                self.audio_out_queue.put(audio_bytes)
+                if self.audio_stream_manager:
+                    self.audio_stream_manager.handle_audio_chunk(audio_bytes)
+                
+                # Store audio response in session manager
+                if self.session_manager and self.current_session_id:
+                    await self.session_manager.add_conversation_item(
+                        session_id=self.current_session_id,
+                        item_type=ConversationItemType.AUDIO,
+                        role="assistant",
+                        content=f"Audio response delta ({len(audio_bytes)} bytes)",
+                        audio_data=audio_bytes
+                    )
+                
+                # Update metrics
+                self.metrics.total_audio_received += len(audio_bytes)
         
         elif message_type == "response.audio_transcript.delta":
             # Log transcript for debugging
@@ -320,8 +522,8 @@ class RealtimeVoiceService:
             if self.memory_manager:
                 await self._store_conversation_turn(response_data)
             
-            if self.on_response_received:
-                await self.on_response_received(response_data)
+            if self.on_response_generated:
+                await self.on_response_generated(response_data)
         
         elif message_type == "error":
             error_info = data.get("error", {})
@@ -353,7 +555,7 @@ class RealtimeVoiceService:
             try:
                 context = await self.memory_manager.inject_context(
                     current_query="voice conversation",
-                    max_context_length=1000
+                    max_context_length=self.config.max_context_length
                 )
                 return context
             except Exception as e:
@@ -404,15 +606,11 @@ class RealtimeVoiceService:
     async def stop_conversation(self):
         """Stop the real-time conversation"""
         try:
-            self.is_recording = False
+            self.is_running = False
             
-            if self.input_stream:
-                self.input_stream.stop_stream()
-                self.input_stream.close()
-            
-            if self.output_stream:
-                self.output_stream.stop_stream()
-                self.output_stream.close()
+            # Stop AudioStreamManager
+            if self.audio_stream_manager:
+                self.audio_stream_manager.stop_all_streams()
             
             self.logger.info("✅ Conversation stopped")
             
@@ -428,8 +626,14 @@ class RealtimeVoiceService:
             if self.websocket:
                 await self.websocket.close()
             
-            if self.pyaudio_instance:
-                self.pyaudio_instance.terminate()
+            # Cleanup AudioStreamManager
+            if self.audio_stream_manager:
+                self.audio_stream_manager.cleanup()
+            
+            # Terminate current session in session manager
+            if self.session_manager and self.current_session_id:
+                await self.session_manager.terminate_session(self.current_session_id, "disconnect")
+                self.current_session_id = None
             
             self.logger.info("✅ Disconnected from Realtime API")
             
@@ -437,14 +641,53 @@ class RealtimeVoiceService:
             self.logger.error(f"❌ Error disconnecting: {e}")
     
     def get_metrics(self) -> Dict[str, Any]:
-        """Get performance metrics"""
-        return {
+        """Get comprehensive performance metrics"""
+        base_metrics = {
             "is_connected": self.is_connected,
-            "is_recording": self.is_recording,
+            "is_running": self.is_running,
             "session_id": self.session_id,
-            "audio_in_queue_size": self.audio_in_queue.qsize(),
-            "audio_out_queue_size": self.audio_out_queue.qsize()
+            "current_session_id": self.current_session_id,
+            "total_audio_sent": self.metrics.total_audio_sent,
+            "total_audio_received": self.metrics.total_audio_received,
+            "total_turns": self.metrics.total_turns,
+            "connection_count": self.metrics.connection_count,
+            "error_count": self.metrics.error_count,
+            "fallback_count": self.metrics.fallback_count,
+            "average_response_time": self.metrics.average_response_time,
+            "last_response_time": self.metrics.last_response_time
         }
+        
+        # Add AudioStreamManager metrics if available
+        if self.audio_stream_manager:
+            try:
+                audio_metrics = self.audio_stream_manager.get_performance_metrics()
+                base_metrics.update({
+                    "audio_stream_metrics": audio_metrics
+                })
+            except Exception:
+                base_metrics["audio_stream_metrics"] = {"status": "unavailable"}
+        
+        # Add Session Manager metrics if available
+        if self.session_manager:
+            try:
+                session_metrics = self.session_manager.get_metrics()
+                base_metrics.update({
+                    "session_manager_metrics": session_metrics
+                })
+            except Exception:
+                base_metrics["session_manager_metrics"] = {"status": "unavailable"}
+        
+        # Add Error Handler metrics if available
+        if self.error_handler:
+            try:
+                error_metrics = self.error_handler.get_error_metrics()
+                base_metrics.update({
+                    "error_handler_metrics": error_metrics
+                })
+            except Exception:
+                base_metrics["error_handler_metrics"] = {"status": "unavailable"}
+        
+        return base_metrics
 
 
 # Example usage

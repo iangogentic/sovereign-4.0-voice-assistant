@@ -36,6 +36,16 @@ from .screen_watcher import (
     ActiveWindowDetector, ScreenImageProcessor, OCRProcessor,
     create_screen_watcher, get_default_screen_config
 )
+from .screen_context_provider import (
+    ScreenContextProvider, ScreenContextConfig, ScreenContextData,
+    ScreenContentFormatter, create_screen_context_provider, 
+    get_default_screen_context_config
+)
+from .smart_context_manager import (
+    SmartContextManager, SmartContextConfig, ContextBudget, ContextSegment,
+    ConversationTurn, ContextPriority, ContextType, TokenCounter, RelevanceScorer,
+    ContextCompressor, create_smart_context_manager, get_default_smart_context_config
+)
 from .kimi_agent import (
     KimiK2Agent, KimiConfig, CodeContext, CodeResponse, 
     CodeContextExtractor, DiffGenerator, create_kimi_agent

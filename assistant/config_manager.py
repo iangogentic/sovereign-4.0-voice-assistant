@@ -45,6 +45,12 @@ class EnvironmentType(Enum):
     OFFLINE = "offline"
     TESTING = "testing"
 
+class OperationMode(Enum):
+    """Operation modes for voice assistant functionality"""
+    REALTIME_ONLY = "realtime_only"
+    TRADITIONAL_ONLY = "traditional_only"
+    HYBRID_AUTO = "hybrid_auto"
+
 @dataclass
 class APIConfig:
     """API configuration with secure key handling"""
@@ -334,11 +340,71 @@ class DevelopmentConfig:
     use_test_data: bool = False
     bypass_api_validation: bool = False
 
+
+@dataclass 
+class RealtimeAPIConfig:
+    """OpenAI Realtime API configuration for ultra-low latency voice interactions"""
+    # Core API settings
+    enabled: bool = False
+    model: str = "gpt-4o-realtime-preview-2024-10-01"
+    voice: str = "alloy"  # alloy, echo, fable, onyx, nova, shimmer
+    modalities: List[str] = field(default_factory=lambda: ["text", "audio"])
+    instructions: str = "You are Sovereign, an advanced AI voice assistant with screen awareness and memory capabilities. Provide helpful, natural responses in a conversational tone."
+    
+    # Audio format settings (required by Realtime API)
+    input_audio_format: str = "pcm16"
+    output_audio_format: str = "pcm16"
+    sample_rate: int = 24000  # Required by Realtime API
+    
+    # Audio transcription settings
+    input_audio_transcription: Dict[str, bool] = field(default_factory=lambda: {"enabled": True})
+    
+    # Voice Activity Detection (VAD) settings
+    turn_detection: Dict[str, Union[str, float, int]] = field(default_factory=lambda: {
+        "type": "server_vad",
+        "threshold": 0.5,
+        "prefix_padding_ms": 300,
+        "silence_duration_ms": 200
+    })
+    
+    # Performance and reliability settings
+    temperature: float = 0.8
+    max_response_output_tokens: str = "inf"  # Realtime API uses string for this
+    connection_timeout: float = 30.0
+    max_reconnect_attempts: int = 5
+    initial_retry_delay: float = 1.0
+    max_retry_delay: float = 30.0
+    
+    # Context and memory integration
+    max_context_length: int = 8000
+    include_screen_content: bool = True
+    include_memory_context: bool = True
+    context_refresh_interval: float = 5.0
+    
+    # Session management
+    session_timeout_minutes: int = 30
+    max_concurrent_sessions: int = 10
+    enable_session_persistence: bool = True
+    enable_session_recovery: bool = True
+    
+    # Cost optimization
+    enable_cost_monitoring: bool = True
+    max_cost_per_session: float = 1.0  # USD
+    cost_alert_threshold: float = 0.8  # 80% of max cost
+    
+    # Fallback settings
+    fallback_on_errors: bool = True
+    fallback_on_high_latency: bool = True
+    max_latency_threshold_ms: float = 500.0
+    fallback_after_failures: int = 3
+
+
 @dataclass
 class SovereignConfig:
     """Complete Sovereign 4.0 Voice Assistant configuration"""
     # Core configuration sections
     environment: EnvironmentType = EnvironmentType.DEVELOPMENT
+    operation_mode: OperationMode = OperationMode.HYBRID_AUTO
     api: APIConfig = field(default_factory=APIConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
     stt: STTConfig = field(default_factory=STTConfig)
@@ -350,6 +416,7 @@ class SovereignConfig:
     security: SecurityConfig = field(default_factory=SecurityConfig)
     monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
     development: DevelopmentConfig = field(default_factory=DevelopmentConfig)
+    realtime_api: RealtimeAPIConfig = field(default_factory=RealtimeAPIConfig)
     
     # Metadata
     version: str = "4.0.0"
@@ -366,7 +433,8 @@ class SovereignConfig:
         "performance_monitoring": True,
         "voice_interruption": False,
         "emotion_detection": False,
-        "multi_language": False
+        "multi_language": False,
+        "realtime_api": False  # Enable Realtime API feature
     })
 
 class ConfigurationError(Exception):
@@ -502,6 +570,62 @@ class ConfigManager:
         if api_overrides:
             overrides['api'] = api_overrides
         
+        # Realtime API configuration with REALTIME_API_ prefix
+        realtime_overrides = {}
+        if enabled := os.getenv('REALTIME_API_ENABLED'):
+            realtime_overrides['enabled'] = enabled.lower() in ('true', '1', 'yes')
+        if model := os.getenv('REALTIME_API_MODEL'):
+            realtime_overrides['model'] = model
+        if voice := os.getenv('REALTIME_API_VOICE'):
+            realtime_overrides['voice'] = voice
+        if instructions := os.getenv('REALTIME_API_INSTRUCTIONS'):
+            realtime_overrides['instructions'] = instructions
+        if temperature := os.getenv('REALTIME_API_TEMPERATURE'):
+            try:
+                realtime_overrides['temperature'] = float(temperature)
+            except ValueError:
+                self.logger.warning(f"Invalid REALTIME_API_TEMPERATURE value: {temperature}")
+        if max_tokens := os.getenv('REALTIME_API_MAX_RESPONSE_OUTPUT_TOKENS'):
+            realtime_overrides['max_response_output_tokens'] = max_tokens
+        if timeout := os.getenv('REALTIME_API_CONNECTION_TIMEOUT'):
+            try:
+                realtime_overrides['connection_timeout'] = float(timeout)
+            except ValueError:
+                self.logger.warning(f"Invalid REALTIME_API_CONNECTION_TIMEOUT value: {timeout}")
+        if max_attempts := os.getenv('REALTIME_API_MAX_RECONNECT_ATTEMPTS'):
+            try:
+                realtime_overrides['max_reconnect_attempts'] = int(max_attempts)
+            except ValueError:
+                self.logger.warning(f"Invalid REALTIME_API_MAX_RECONNECT_ATTEMPTS value: {max_attempts}")
+        if context_length := os.getenv('REALTIME_API_MAX_CONTEXT_LENGTH'):
+            try:
+                realtime_overrides['max_context_length'] = int(context_length)
+            except ValueError:
+                self.logger.warning(f"Invalid REALTIME_API_MAX_CONTEXT_LENGTH value: {context_length}")
+        if include_screen := os.getenv('REALTIME_API_INCLUDE_SCREEN_CONTENT'):
+            realtime_overrides['include_screen_content'] = include_screen.lower() in ('true', '1', 'yes')
+        if include_memory := os.getenv('REALTIME_API_INCLUDE_MEMORY_CONTEXT'):
+            realtime_overrides['include_memory_context'] = include_memory.lower() in ('true', '1', 'yes')
+        if cost_monitoring := os.getenv('REALTIME_API_ENABLE_COST_MONITORING'):
+            realtime_overrides['enable_cost_monitoring'] = cost_monitoring.lower() in ('true', '1', 'yes')
+        if max_cost := os.getenv('REALTIME_API_MAX_COST_PER_SESSION'):
+            try:
+                realtime_overrides['max_cost_per_session'] = float(max_cost)
+            except ValueError:
+                self.logger.warning(f"Invalid REALTIME_API_MAX_COST_PER_SESSION value: {max_cost}")
+        if fallback_errors := os.getenv('REALTIME_API_FALLBACK_ON_ERRORS'):
+            realtime_overrides['fallback_on_errors'] = fallback_errors.lower() in ('true', '1', 'yes')
+        if fallback_latency := os.getenv('REALTIME_API_FALLBACK_ON_HIGH_LATENCY'):
+            realtime_overrides['fallback_on_high_latency'] = fallback_latency.lower() in ('true', '1', 'yes')
+        if latency_threshold := os.getenv('REALTIME_API_MAX_LATENCY_THRESHOLD_MS'):
+            try:
+                realtime_overrides['max_latency_threshold_ms'] = float(latency_threshold)
+            except ValueError:
+                self.logger.warning(f"Invalid REALTIME_API_MAX_LATENCY_THRESHOLD_MS value: {latency_threshold}")
+        
+        if realtime_overrides:
+            overrides['realtime_api'] = realtime_overrides
+        
         # Debug mode
         if debug := os.getenv('DEBUG'):
             overrides['development'] = {'debug_mode': debug.lower() in ('true', '1', 'yes')}
@@ -554,6 +678,7 @@ class ConfigManager:
             security_config = SecurityConfig(**config_data.get('security', {}))
             monitoring_config = MonitoringConfig(**config_data.get('monitoring', {}))
             development_config = DevelopmentConfig(**config_data.get('development', {}))
+            realtime_api_config = RealtimeAPIConfig(**config_data.get('realtime_api', {}))
             
             # Create main config
             config = SovereignConfig(
@@ -568,7 +693,8 @@ class ConfigManager:
                 code_agent=code_agent_config,
                 security=security_config,
                 monitoring=monitoring_config,
-                development=development_config
+                development=development_config,
+                realtime_api=realtime_api_config
             )
             
             # Apply top-level overrides
@@ -637,6 +763,95 @@ class ConfigManager:
         # Validate screen settings
         if config.screen.enabled and config.screen.screenshot_interval <= 0:
             errors.append("Screen screenshot_interval must be positive")
+        
+        # Validate Realtime API settings
+        if config.realtime_api.enabled:
+            # Validate API key requirement
+            if not config.development.mock_apis and not config.api.openai_api_key:
+                errors.append("OpenAI API key is required for Realtime API")
+            
+            # Validate voice selection
+            valid_voices = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
+            if config.realtime_api.voice not in valid_voices:
+                errors.append(f"Invalid Realtime API voice: {config.realtime_api.voice}. Must be one of: {', '.join(valid_voices)}")
+            
+            # Validate modalities
+            valid_modalities = ["text", "audio"]
+            for modality in config.realtime_api.modalities:
+                if modality not in valid_modalities:
+                    errors.append(f"Invalid Realtime API modality: {modality}. Must be one of: {', '.join(valid_modalities)}")
+            
+            # Validate audio formats
+            if config.realtime_api.input_audio_format not in ["pcm16", "g711_ulaw", "g711_alaw"]:
+                errors.append(f"Invalid input audio format: {config.realtime_api.input_audio_format}")
+            
+            if config.realtime_api.output_audio_format not in ["pcm16", "g711_ulaw", "g711_alaw"]:
+                errors.append(f"Invalid output audio format: {config.realtime_api.output_audio_format}")
+            
+            # Validate sample rate (Realtime API requires 24kHz)
+            if config.realtime_api.sample_rate != 24000:
+                errors.append("Realtime API requires 24kHz sample rate")
+            
+            # Validate temperature range
+            if not 0.0 <= config.realtime_api.temperature <= 2.0:
+                errors.append("Realtime API temperature must be between 0.0 and 2.0")
+            
+            # Validate timeout values
+            if config.realtime_api.connection_timeout <= 0:
+                errors.append("Realtime API connection timeout must be positive")
+            
+            if config.realtime_api.max_reconnect_attempts < 0:
+                errors.append("Realtime API max reconnect attempts must be non-negative")
+            
+            # Validate session settings
+            if config.realtime_api.session_timeout_minutes <= 0:
+                errors.append("Realtime API session timeout must be positive")
+            
+            if config.realtime_api.max_concurrent_sessions <= 0:
+                errors.append("Realtime API max concurrent sessions must be positive")
+            
+            # Validate cost settings
+            if config.realtime_api.max_cost_per_session < 0:
+                errors.append("Realtime API max cost per session must be non-negative")
+            
+            if not 0.0 <= config.realtime_api.cost_alert_threshold <= 1.0:
+                errors.append("Realtime API cost alert threshold must be between 0.0 and 1.0")
+            
+            # Validate latency threshold
+            if config.realtime_api.max_latency_threshold_ms <= 0:
+                errors.append("Realtime API latency threshold must be positive")
+            
+            # Validate VAD settings
+            vad_config = config.realtime_api.turn_detection
+            if "threshold" in vad_config and not 0.0 <= vad_config["threshold"] <= 1.0:
+                errors.append("Realtime API VAD threshold must be between 0.0 and 1.0")
+        
+        # Validate operation mode settings
+        if config.operation_mode == OperationMode.REALTIME_ONLY:
+            # REALTIME_ONLY mode requires Realtime API to be enabled
+            if not config.realtime_api.enabled:
+                errors.append("REALTIME_ONLY operation mode requires realtime_api.enabled to be true")
+            
+            # Validate OpenAI API key is available for Realtime API
+            if not config.development.mock_apis and not config.api.openai_api_key:
+                errors.append("REALTIME_ONLY operation mode requires OpenAI API key")
+                
+        elif config.operation_mode == OperationMode.TRADITIONAL_ONLY:
+            # TRADITIONAL_ONLY mode requires traditional pipeline components
+            if not config.stt.primary_provider or not config.tts.primary_provider:
+                errors.append("TRADITIONAL_ONLY operation mode requires STT and TTS providers to be configured")
+            
+            # Warn if Realtime API is enabled but mode is traditional only
+            if config.realtime_api.enabled:
+                logger.warning("Realtime API is enabled but operation mode is TRADITIONAL_ONLY - Realtime API will be ignored")
+                
+        elif config.operation_mode == OperationMode.HYBRID_AUTO:
+            # HYBRID_AUTO mode should have both traditional and realtime components available
+            if config.realtime_api.enabled and not config.development.mock_apis and not config.api.openai_api_key:
+                errors.append("HYBRID_AUTO operation mode with Realtime API enabled requires OpenAI API key")
+            
+            if not config.stt.primary_provider or not config.tts.primary_provider:
+                errors.append("HYBRID_AUTO operation mode requires STT and TTS providers for fallback functionality")
         
         if errors:
             raise ConfigurationError(f"Configuration validation failed: {'; '.join(errors)}")
@@ -844,6 +1059,39 @@ class ConfigManager:
                     'mock_apis': config.development.mock_apis,
                     'enable_hot_reload': config.development.enable_hot_reload,
                     'skip_audio_init': config.development.skip_audio_init
+                },
+                'realtime_api': {
+                    'enabled': config.realtime_api.enabled,
+                    'model': config.realtime_api.model,
+                    'voice': config.realtime_api.voice,
+                    'modalities': config.realtime_api.modalities,
+                    'instructions': config.realtime_api.instructions,
+                    'input_audio_format': config.realtime_api.input_audio_format,
+                    'output_audio_format': config.realtime_api.output_audio_format,
+                    'sample_rate': config.realtime_api.sample_rate,
+                    'input_audio_transcription': config.realtime_api.input_audio_transcription,
+                    'turn_detection': config.realtime_api.turn_detection,
+                    'temperature': config.realtime_api.temperature,
+                    'max_response_output_tokens': config.realtime_api.max_response_output_tokens,
+                    'connection_timeout': config.realtime_api.connection_timeout,
+                    'max_reconnect_attempts': config.realtime_api.max_reconnect_attempts,
+                    'initial_retry_delay': config.realtime_api.initial_retry_delay,
+                    'max_retry_delay': config.realtime_api.max_retry_delay,
+                    'max_context_length': config.realtime_api.max_context_length,
+                    'include_screen_content': config.realtime_api.include_screen_content,
+                    'include_memory_context': config.realtime_api.include_memory_context,
+                    'context_refresh_interval': config.realtime_api.context_refresh_interval,
+                    'session_timeout_minutes': config.realtime_api.session_timeout_minutes,
+                    'max_concurrent_sessions': config.realtime_api.max_concurrent_sessions,
+                    'enable_session_persistence': config.realtime_api.enable_session_persistence,
+                    'enable_session_recovery': config.realtime_api.enable_session_recovery,
+                    'enable_cost_monitoring': config.realtime_api.enable_cost_monitoring,
+                    'max_cost_per_session': config.realtime_api.max_cost_per_session,
+                    'cost_alert_threshold': config.realtime_api.cost_alert_threshold,
+                    'fallback_on_errors': config.realtime_api.fallback_on_errors,
+                    'fallback_on_high_latency': config.realtime_api.fallback_on_high_latency,
+                    'max_latency_threshold_ms': config.realtime_api.max_latency_threshold_ms,
+                    'fallback_after_failures': config.realtime_api.fallback_after_failures
                 }
             }
             
@@ -955,6 +1203,7 @@ __all__ = [
     'SecurityConfig',
     'MonitoringConfig',
     'DevelopmentConfig',
+    'RealtimeAPIConfig',
     'EnvironmentType',
     'ConfigurationError',
     'get_config_manager',

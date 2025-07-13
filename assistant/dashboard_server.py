@@ -37,6 +37,9 @@ from flask_cors import CORS
 
 # Import our metrics collector
 from .metrics_collector import MetricsCollector, MetricType, ComponentType
+from .mode_switch_manager import ModeManager, OperationMode, ModeTransitionError, ModeValidationError
+from .fallback_detector import ModeValidator, ValidationSeverity, FailureType
+from .config_manager import SovereignConfig
 
 logger = logging.getLogger(__name__)
 
@@ -105,10 +108,25 @@ class DashboardServer:
     
     def __init__(self, 
                  metrics_collector: Optional[MetricsCollector] = None,
+                 mode_manager: Optional[ModeManager] = None,
+                 mode_validator: Optional[ModeValidator] = None,
                  host: str = "localhost",
                  port: int = 8080,
                  debug: bool = False):
+        """
+        Initialize the dashboard server
+        
+        Args:
+            metrics_collector: Optional metrics collector for performance data
+            mode_manager: Optional mode manager for operation mode switching
+            mode_validator: Optional mode validator for validation checks
+            host: Server host address
+            port: Server port number
+            debug: Enable Flask debug mode
+        """
         self.metrics_collector = metrics_collector
+        self.mode_manager = mode_manager
+        self.mode_validator = mode_validator
         self.host = host
         self.port = port
         self.debug = debug
@@ -251,6 +269,225 @@ class DashboardServer:
                     'status': 'error',
                     'reason': str(e)
                 })
+        
+        # ========================================
+        # Mode Management API Endpoints
+        # ========================================
+        
+        @self.app.route('/api/mode/status', methods=['GET'])
+        def get_mode_status():
+            """Get current operation mode status and capabilities"""
+            if not self.mode_manager:
+                return jsonify({'error': 'Mode manager not available'}), 503
+            
+            try:
+                current_mode = self.mode_manager.get_current_mode()
+                capabilities = self.mode_manager.get_capabilities(current_mode)
+                metrics = self.mode_manager.get_mode_metrics()
+                status = self.mode_manager.get_status()
+                
+                # Get health status if validator is available
+                health_summary = {}
+                if self.mode_validator:
+                    health_summary = self.mode_validator.get_mode_health_summary()
+                
+                return jsonify({
+                    'current_mode': current_mode.value if current_mode else None,
+                    'capabilities': {
+                        'can_use_realtime_api': capabilities.can_use_realtime_api if capabilities else False,
+                        'can_use_traditional_pipeline': capabilities.can_use_traditional_pipeline if capabilities else False,
+                        'supports_screen_context': capabilities.supports_screen_context if capabilities else False,
+                        'supports_memory_injection': capabilities.supports_memory_injection if capabilities else False,
+                        'max_context_tokens': capabilities.max_context_tokens if capabilities else 0
+                    },
+                    'metrics': {
+                        'total_sessions': metrics.get(current_mode, {}).get('total_sessions', 0) if current_mode and metrics else 0,
+                        'success_rate': metrics.get(current_mode, {}).get('success_rate', 0.0) if current_mode and metrics else 0.0,
+                        'average_response_time': metrics.get(current_mode, {}).get('avg_response_time', 0.0) if current_mode and metrics else 0.0,
+                        'estimated_cost_per_session': metrics.get(current_mode, {}).get('estimated_cost', 0.0) if current_mode and metrics else 0.0
+                    },
+                    'health': health_summary,
+                    'status': {
+                        'initialized': status.get('initialized', False) if status else False,
+                        'transition_history': status.get('transition_history', [])[-5:] if status else []  # Last 5 transitions
+                    },
+                    'timestamp': datetime.now().isoformat()
+                })
+                
+            except Exception as e:
+                logger.error(f"Error getting mode status: {e}")
+                return jsonify({'error': str(e)}), 500
+        
+        @self.app.route('/api/mode/switch', methods=['POST'])
+        def switch_mode():
+            """Switch to a different operation mode"""
+            if not self.mode_manager:
+                return jsonify({'error': 'Mode manager not available'}), 503
+            
+            try:
+                data = request.get_json()
+                if not data or 'mode' not in data:
+                    return jsonify({'error': 'Mode parameter required'}), 400
+                
+                target_mode_str = data['mode']
+                reason = data.get('reason', 'User requested mode switch')
+                
+                # Validate mode string
+                try:
+                    target_mode = OperationMode(target_mode_str)
+                except ValueError:
+                    return jsonify({
+                        'error': f'Invalid mode: {target_mode_str}',
+                        'valid_modes': [mode.value for mode in OperationMode]
+                    }), 400
+                
+                # Validate mode before switching (if validator available)
+                validation_issues = []
+                if self.mode_validator:
+                    is_valid, issues = asyncio.run(self.mode_validator.validate_mode(target_mode))
+                    validation_issues = [
+                        {
+                            'code': issue.code,
+                            'severity': issue.severity.value,
+                            'message': issue.message,
+                            'suggestion': issue.suggestion
+                        }
+                        for issue in issues
+                    ]
+                    
+                    # Block switch if critical issues found
+                    critical_issues = [issue for issue in issues if issue.severity == ValidationSeverity.CRITICAL]
+                    if critical_issues:
+                        return jsonify({
+                            'error': 'Cannot switch mode due to critical issues',
+                            'issues': validation_issues
+                        }), 400
+                
+                # Attempt the mode switch
+                success = asyncio.run(self.mode_manager.switch_mode(target_mode, reason))
+                
+                if success:
+                    # Emit real-time update to connected clients
+                    self.socketio.emit('mode_changed', {
+                        'mode': target_mode.value,
+                        'reason': reason,
+                        'timestamp': datetime.now().isoformat(),
+                        'validation_issues': validation_issues
+                    })
+                    
+                    return jsonify({
+                        'success': True,
+                        'mode': target_mode.value,
+                        'reason': reason,
+                        'validation_issues': validation_issues,
+                        'timestamp': datetime.now().isoformat()
+                    })
+                else:
+                    return jsonify({
+                        'error': 'Mode switch failed',
+                        'validation_issues': validation_issues
+                    }), 500
+                    
+            except ModeValidationError as e:
+                return jsonify({'error': f'Mode validation failed: {str(e)}'}), 400
+            except ModeTransitionError as e:
+                return jsonify({'error': f'Mode transition failed: {str(e)}'}), 500
+            except Exception as e:
+                logger.error(f"Error switching mode: {e}")
+                return jsonify({'error': str(e)}), 500
+        
+        @self.app.route('/api/mode/validate', methods=['POST'])
+        def validate_mode():
+            """Validate if a mode can be used without actually switching"""
+            if not self.mode_validator:
+                return jsonify({'error': 'Mode validator not available'}), 503
+            
+            try:
+                data = request.get_json()
+                if not data or 'mode' not in data:
+                    return jsonify({'error': 'Mode parameter required'}), 400
+                
+                target_mode_str = data['mode']
+                
+                # Validate mode string
+                try:
+                    target_mode = OperationMode(target_mode_str)
+                except ValueError:
+                    return jsonify({
+                        'error': f'Invalid mode: {target_mode_str}',
+                        'valid_modes': [mode.value for mode in OperationMode]
+                    }), 400
+                
+                # Perform validation
+                is_valid, issues = asyncio.run(self.mode_validator.validate_mode(target_mode, force_refresh=True))
+                
+                validation_issues = [
+                    {
+                        'code': issue.code,
+                        'severity': issue.severity.value,
+                        'message': issue.message,
+                        'suggestion': issue.suggestion,
+                        'component': issue.component
+                    }
+                    for issue in issues
+                ]
+                
+                return jsonify({
+                    'mode': target_mode.value,
+                    'is_valid': is_valid,
+                    'issues': validation_issues,
+                    'timestamp': datetime.now().isoformat()
+                })
+                
+            except Exception as e:
+                logger.error(f"Error validating mode: {e}")
+                return jsonify({'error': str(e)}), 500
+        
+        @self.app.route('/api/mode/available', methods=['GET'])
+        def get_available_modes():
+            """Get list of all available operation modes with descriptions"""
+            modes = []
+            for mode in OperationMode:
+                description = ""
+                if mode == OperationMode.REALTIME_ONLY:
+                    description = "Uses only OpenAI Realtime API for fastest response times"
+                elif mode == OperationMode.TRADITIONAL_ONLY:
+                    description = "Uses traditional STT → LLM → TTS pipeline for reliability"
+                elif mode == OperationMode.HYBRID_AUTO:
+                    description = "Automatically switches between realtime and traditional based on conditions"
+                
+                # Get validation status if validator is available
+                is_available = True
+                validation_summary = "Not validated"
+                if self.mode_validator:
+                    try:
+                        is_valid, issues = asyncio.run(self.mode_validator.validate_mode(mode))
+                        is_available = is_valid
+                        critical_issues = [issue for issue in issues if issue.severity == ValidationSeverity.CRITICAL]
+                        error_issues = [issue for issue in issues if issue.severity == ValidationSeverity.ERROR]
+                        
+                        if critical_issues:
+                            validation_summary = f"Critical issues: {len(critical_issues)}"
+                        elif error_issues:
+                            validation_summary = f"Errors: {len(error_issues)}"
+                        else:
+                            validation_summary = "Available"
+                    except Exception:
+                        is_available = False
+                        validation_summary = "Validation failed"
+                
+                modes.append({
+                    'value': mode.value,
+                    'name': mode.value.replace('_', ' ').title(),
+                    'description': description,
+                    'is_available': is_available,
+                    'validation_summary': validation_summary
+                })
+            
+            return jsonify({
+                'modes': modes,
+                'timestamp': datetime.now().isoformat()
+            })
     
     def _setup_socket_handlers(self):
         """Setup Socket.IO event handlers"""
@@ -531,8 +768,17 @@ class DashboardServer:
         logger.info("🌐 Dashboard server stopped")
 
 def create_dashboard_server(metrics_collector: Optional[MetricsCollector] = None,
+                          mode_manager: Optional[ModeManager] = None,
+                          mode_validator: Optional[ModeValidator] = None,
                           host: str = "localhost",
                           port: int = 8080,
                           debug: bool = False) -> DashboardServer:
-    """Factory function to create dashboard server"""
-    return DashboardServer(metrics_collector, host, port, debug) 
+    """Factory function to create a dashboard server instance"""
+    return DashboardServer(
+        metrics_collector=metrics_collector,
+        mode_manager=mode_manager,
+        mode_validator=mode_validator,
+        host=host,
+        port=port,
+        debug=debug
+    ) 

@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from assistant.config_manager import (
     ConfigManager, SovereignConfig, APIConfig, AudioConfig, STTConfig, TTSConfig,
     LLMConfig, MemoryConfig, ScreenConfig, CodeAgentConfig, SecurityConfig,
-    MonitoringConfig, DevelopmentConfig, EnvironmentType, ConfigurationError,
+    MonitoringConfig, DevelopmentConfig, EnvironmentType, OperationMode, ConfigurationError,
     get_config_manager, get_config, reload_config, create_config_template
 )
 
@@ -618,6 +618,217 @@ class TestGlobalConfigFunctions:
         assert isinstance(config, SovereignConfig)
         assert config.version == "4.0.0"
         assert config.name == "Sovereign Voice Assistant"
+
+        config_path = os.path.join(self.temp_dir, "test_template.yaml")
+        create_config_template(config_path)
+        
+        # Verify the template file was created
+        assert os.path.exists(config_path)
+        
+        # Load and verify the content
+        with open(config_path, 'r') as f:
+            config_data = yaml.safe_load(f)
+        
+        assert 'environment' in config_data
+        assert 'api' in config_data
+        assert 'audio' in config_data
+
+
+class TestOperationMode:
+    """Test Operation Mode functionality"""
+
+    def setup_method(self):
+        """Setup test environment"""
+        self.temp_dir = tempfile.mkdtemp()
+        self.config_path = os.path.join(self.temp_dir, "test_config.yaml")
+        self.config_manager = None
+
+    def teardown_method(self):
+        """Clean up test environment"""
+        if self.config_manager:
+            self.config_manager.disable_hot_reload()
+        shutil.rmtree(self.temp_dir)
+
+    def create_config_with_operation_mode(self, operation_mode: str, realtime_enabled: bool = False) -> dict:
+        """Create a configuration with specified operation mode"""
+        return {
+            "environment": "development",
+            "operation_mode": operation_mode,
+            "api": {
+                "openai_api_key": "test-key" if not realtime_enabled or operation_mode != "realtime_only" else "test-realtime-key"
+            },
+            "stt": {
+                "primary_provider": "openai",
+                "primary_model": "whisper-1"
+            },
+            "tts": {
+                "primary_provider": "openai",
+                "primary_model": "tts-1"
+            },
+            "realtime_api": {
+                "enabled": realtime_enabled
+            },
+            "development": {
+                "mock_apis": False
+            }
+        }
+
+    def write_config_file(self, config_data: dict, path: str = None):
+        """Write configuration data to YAML file"""
+        path = path or self.config_path
+        with open(path, 'w') as f:
+            yaml.dump(config_data, f)
+
+    def test_operation_mode_enum_values(self):
+        """Test OperationMode enum has correct values"""
+        assert OperationMode.REALTIME_ONLY.value == "realtime_only"
+        assert OperationMode.TRADITIONAL_ONLY.value == "traditional_only"
+        assert OperationMode.HYBRID_AUTO.value == "hybrid_auto"
+
+    def test_operation_mode_default_value(self):
+        """Test SovereignConfig has correct default operation mode"""
+        config = SovereignConfig()
+        assert config.operation_mode == OperationMode.HYBRID_AUTO
+
+    def test_load_config_with_operation_mode_hybrid_auto(self):
+        """Test loading configuration with hybrid_auto operation mode"""
+        config_data = self.create_config_with_operation_mode("hybrid_auto", realtime_enabled=True)
+        self.write_config_file(config_data)
+        
+        self.config_manager = ConfigManager(self.config_path)
+        config = self.config_manager.load_config()
+        
+        assert config.operation_mode == OperationMode.HYBRID_AUTO
+        assert config.realtime_api.enabled is True
+
+    def test_load_config_with_operation_mode_realtime_only(self):
+        """Test loading configuration with realtime_only operation mode"""
+        config_data = self.create_config_with_operation_mode("realtime_only", realtime_enabled=True)
+        self.write_config_file(config_data)
+        
+        self.config_manager = ConfigManager(self.config_path)
+        config = self.config_manager.load_config()
+        
+        assert config.operation_mode == OperationMode.REALTIME_ONLY
+        assert config.realtime_api.enabled is True
+
+    def test_load_config_with_operation_mode_traditional_only(self):
+        """Test loading configuration with traditional_only operation mode"""
+        config_data = self.create_config_with_operation_mode("traditional_only", realtime_enabled=False)
+        self.write_config_file(config_data)
+        
+        self.config_manager = ConfigManager(self.config_path)
+        config = self.config_manager.load_config()
+        
+        assert config.operation_mode == OperationMode.TRADITIONAL_ONLY
+        assert config.realtime_api.enabled is False
+
+    def test_validation_realtime_only_requires_realtime_api_enabled(self):
+        """Test validation fails when REALTIME_ONLY mode has realtime API disabled"""
+        config_data = self.create_config_with_operation_mode("realtime_only", realtime_enabled=False)
+        self.write_config_file(config_data)
+        
+        self.config_manager = ConfigManager(self.config_path)
+        
+        with pytest.raises(ConfigurationError) as exc_info:
+            self.config_manager.load_config()
+        
+        assert "REALTIME_ONLY operation mode requires realtime_api.enabled to be true" in str(exc_info.value)
+
+    def test_validation_realtime_only_requires_openai_api_key(self):
+        """Test validation fails when REALTIME_ONLY mode lacks OpenAI API key"""
+        config_data = self.create_config_with_operation_mode("realtime_only", realtime_enabled=True)
+        config_data["api"]["openai_api_key"] = None  # Remove API key
+        self.write_config_file(config_data)
+        
+        self.config_manager = ConfigManager(self.config_path)
+        
+        with pytest.raises(ConfigurationError) as exc_info:
+            self.config_manager.load_config()
+        
+        assert "REALTIME_ONLY operation mode requires OpenAI API key" in str(exc_info.value)
+
+    def test_validation_traditional_only_requires_stt_tts_providers(self):
+        """Test validation fails when TRADITIONAL_ONLY mode lacks STT/TTS providers"""
+        config_data = self.create_config_with_operation_mode("traditional_only", realtime_enabled=False)
+        config_data["stt"]["primary_provider"] = None  # Remove STT provider
+        self.write_config_file(config_data)
+        
+        self.config_manager = ConfigManager(self.config_path)
+        
+        with pytest.raises(ConfigurationError) as exc_info:
+            self.config_manager.load_config()
+        
+        assert "TRADITIONAL_ONLY operation mode requires STT and TTS providers to be configured" in str(exc_info.value)
+
+    def test_validation_hybrid_auto_with_realtime_requires_openai_key(self):
+        """Test validation fails when HYBRID_AUTO mode with realtime enabled lacks OpenAI API key"""
+        config_data = self.create_config_with_operation_mode("hybrid_auto", realtime_enabled=True)
+        config_data["api"]["openai_api_key"] = None  # Remove API key
+        self.write_config_file(config_data)
+        
+        self.config_manager = ConfigManager(self.config_path)
+        
+        with pytest.raises(ConfigurationError) as exc_info:
+            self.config_manager.load_config()
+        
+        assert "HYBRID_AUTO operation mode with Realtime API enabled requires OpenAI API key" in str(exc_info.value)
+
+    def test_validation_hybrid_auto_requires_fallback_providers(self):
+        """Test validation fails when HYBRID_AUTO mode lacks fallback STT/TTS providers"""
+        config_data = self.create_config_with_operation_mode("hybrid_auto", realtime_enabled=False)
+        config_data["tts"]["primary_provider"] = None  # Remove TTS provider
+        self.write_config_file(config_data)
+        
+        self.config_manager = ConfigManager(self.config_path)
+        
+        with pytest.raises(ConfigurationError) as exc_info:
+            self.config_manager.load_config()
+        
+        assert "HYBRID_AUTO operation mode requires STT and TTS providers for fallback functionality" in str(exc_info.value)
+
+    @patch('assistant.config_manager.logger')
+    def test_validation_traditional_only_with_realtime_enabled_warns(self, mock_logger):
+        """Test warning when TRADITIONAL_ONLY mode has realtime API enabled"""
+        config_data = self.create_config_with_operation_mode("traditional_only", realtime_enabled=True)
+        self.write_config_file(config_data)
+        
+        self.config_manager = ConfigManager(self.config_path)
+        config = self.config_manager.load_config()
+        
+        # Verify config loads successfully
+        assert config.operation_mode == OperationMode.TRADITIONAL_ONLY
+        assert config.realtime_api.enabled is True
+        
+        # Verify warning was logged
+        mock_logger.warning.assert_called_with(
+            "Realtime API is enabled but operation mode is TRADITIONAL_ONLY - Realtime API will be ignored"
+        )
+
+    def test_operation_mode_mock_apis_bypass_validation(self):
+        """Test that mock APIs bypass operation mode API key validation"""
+        config_data = self.create_config_with_operation_mode("realtime_only", realtime_enabled=True)
+        config_data["api"]["openai_api_key"] = None  # Remove API key
+        config_data["development"]["mock_apis"] = True  # Enable mock APIs
+        self.write_config_file(config_data)
+        
+        self.config_manager = ConfigManager(self.config_path)
+        config = self.config_manager.load_config()
+        
+        # Should load successfully with mock APIs enabled
+        assert config.operation_mode == OperationMode.REALTIME_ONLY
+        assert config.development.mock_apis is True
+
+    def test_invalid_operation_mode_value(self):
+        """Test handling of invalid operation mode value"""
+        config_data = self.create_config_with_operation_mode("invalid_mode")
+        self.write_config_file(config_data)
+        
+        self.config_manager = ConfigManager(self.config_path)
+        
+        with pytest.raises(Exception):  # Should raise during enum conversion
+            self.config_manager.load_config()
+
 
 class TestConfigurationErrors:
     """Test configuration error handling"""

@@ -4,6 +4,12 @@
 
 # Environment and Metadata
 environment: development
+# Operation Mode: Controls how the voice assistant operates
+# Options: realtime_only, traditional_only, hybrid_auto
+# - realtime_only: Uses only OpenAI Realtime API for fastest responses
+# - traditional_only: Uses traditional STT -> LLM -> TTS pipeline  
+# - hybrid_auto: Automatically switches between modes based on availability and performance
+operation_mode: hybrid_auto
 version: "4.0.0"
 name: "Sovereign Voice Assistant"
 description: "Advanced AI voice assistant with multi-modal capabilities"
@@ -18,6 +24,7 @@ features:
   voice_interruption: false
   emotion_detection: false
   multi_language: false
+  realtime_api: false  # Enable OpenAI Realtime API for ultra-low latency
 
 # API Configuration
 # All API keys are loaded from environment variables for security
@@ -277,6 +284,76 @@ monitoring:
   # Error tracking
   error_reporting: true
   max_error_backlog: 100
+
+# Performance and Monitoring
+performance:
+  # Logging
+  log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  log_file: "./logs/jarvis.log"
+  
+  # Metrics
+  metrics_enabled: true
+  metrics_port: 8000
+  
+  # Health checks
+  health_check_interval: 30  # seconds
+
+# OpenAI Realtime API Configuration (Ultra-Low Latency Voice)
+# Enable this for <300ms response times using OpenAI's new Realtime API
+realtime_api:
+  # Core settings
+  enabled: false  # Set to true to enable Realtime API mode
+  model: "gpt-4o-realtime-preview-2024-10-01"
+  voice: "alloy"  # Options: alloy, echo, fable, onyx, nova, shimmer
+  modalities: ["text", "audio"]
+  instructions: "You are Sovereign, an advanced AI voice assistant with screen awareness and memory capabilities. Provide helpful, natural responses in a conversational tone."
+  
+  # Audio format settings (required by Realtime API)
+  input_audio_format: "pcm16"
+  output_audio_format: "pcm16"
+  sample_rate: 24000  # Required: 24kHz for Realtime API
+  
+  # Audio transcription
+  input_audio_transcription:
+    enabled: true
+  
+  # Voice Activity Detection (VAD)
+  turn_detection:
+    type: "server_vad"  # Server-side voice activity detection
+    threshold: 0.5      # Sensitivity (0.0-1.0)
+    prefix_padding_ms: 300      # Audio before speech starts
+    silence_duration_ms: 200    # Silence before turn ends
+  
+  # Performance and reliability
+  temperature: 0.8
+  max_response_output_tokens: "inf"  # "inf" or specific number
+  connection_timeout: 30.0
+  max_reconnect_attempts: 5
+  initial_retry_delay: 1.0
+  max_retry_delay: 30.0
+  
+  # Context and memory integration
+  max_context_length: 8000
+  include_screen_content: true   # Include screen OCR in context
+  include_memory_context: true   # Include conversation history
+  context_refresh_interval: 5.0  # Seconds between context updates
+  
+  # Session management
+  session_timeout_minutes: 30
+  max_concurrent_sessions: 10
+  enable_session_persistence: true
+  enable_session_recovery: true
+  
+  # Cost optimization
+  enable_cost_monitoring: true
+  max_cost_per_session: 1.0     # USD limit per session
+  cost_alert_threshold: 0.8     # Alert at 80% of cost limit
+  
+  # Fallback settings (switch to traditional pipeline)
+  fallback_on_errors: true
+  fallback_on_high_latency: true
+  max_latency_threshold_ms: 500.0  # Fallback if latency > 500ms
+  fallback_after_failures: 3      # Fallback after N failures
 
 # Development Configuration
 development:

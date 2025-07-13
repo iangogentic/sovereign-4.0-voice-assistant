@@ -40,6 +40,17 @@
                     <span class="health-text" id="healthText">Unknown</span>
                 </div>
                 
+                <div class="operation-mode" id="operationMode">
+                    <div class="mode-indicator">
+                        <span class="mode-icon" id="modeIcon">🔄</span>
+                        <div class="mode-info">
+                            <div class="mode-current" id="modeCurrent">Loading...</div>
+                            <div class="mode-status" id="modeStatus">Initializing</div>
+                        </div>
+                        <button class="mode-switch-btn" id="modeSwitchBtn" onclick="showModeSelector()">⚙️</button>
+                    </div>
+                </div>
+                
                 <div class="time-display" id="timeDisplay"></div>
             </div>
         </div>
@@ -310,6 +321,52 @@
     <!-- Mobile Menu Button -->
     <button class="mobile-menu-btn" id="mobileMenuBtn" onclick="openMobileNav()">☰</button>
 
+    <!-- Mode Selector Modal -->
+    <div class="mode-selector-overlay" id="modeSelectorOverlay" style="display: none;">
+        <div class="mode-selector-modal">
+            <div class="modal-header">
+                <h3>🎛️ Operation Mode Selection</h3>
+                <button class="close-modal" onclick="hideModeSelector()">✕</button>
+            </div>
+            
+            <div class="modal-content">
+                <div class="current-mode-display">
+                    <h4>Current Mode</h4>
+                    <div class="current-mode-card" id="currentModeCard">
+                        <div class="mode-name" id="currentModeName">Loading...</div>
+                        <div class="mode-description" id="currentModeDescription">Please wait...</div>
+                        <div class="mode-metrics" id="currentModeMetrics">
+                            <span>Sessions: <span id="currentModeSessions">--</span></span>
+                            <span>Success Rate: <span id="currentModeSuccessRate">--%</span></span>
+                            <span>Avg Response: <span id="currentModeResponseTime">--ms</span></span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="available-modes" id="availableModes">
+                    <h4>Available Modes</h4>
+                    <div class="modes-grid" id="modesGrid">
+                        <!-- Mode cards will be populated by JavaScript -->
+                    </div>
+                </div>
+                
+                <div class="validation-issues" id="validationIssues" style="display: none;">
+                    <h4>⚠️ Validation Issues</h4>
+                    <div class="issues-list" id="issuesList">
+                        <!-- Issues will be populated by JavaScript -->
+                    </div>
+                </div>
+            </div>
+            
+            <div class="modal-actions">
+                <button class="btn-secondary" onclick="hideModeSelector()">Cancel</button>
+                <button class="btn-primary" id="confirmModeSwitch" onclick="confirmModeSwitch()" disabled>
+                    Switch Mode
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Loading Overlay -->
     <div class="loading-overlay" id="loadingOverlay">
         <div class="loading-content">
@@ -320,5 +377,6 @@
 
     <!-- Custom JavaScript -->
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/mode-switcher.js') }}"></script>
 </body>
 </html> 

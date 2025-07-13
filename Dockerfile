@@ -70,6 +70,12 @@ RUN pip install --upgrade pip setuptools wheel
 # Install PyTorch with CPU support (smaller size for containers)
 RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 
+# Install Realtime API specific dependencies
+RUN pip install \
+    websockets==12.0 \
+    asyncio-mqtt==0.16.1 \
+    prometheus-client==0.19.0
+
 # Install other requirements
 RUN pip install -r requirements.txt
 
